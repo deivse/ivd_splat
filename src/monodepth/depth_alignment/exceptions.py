@@ -1,0 +1,2 @@
+class LowDepthAlignmentConfidenceError(Exception):
+    pass

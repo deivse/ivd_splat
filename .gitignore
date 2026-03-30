@@ -1,0 +1,13 @@
+.venv/
+__pycache__
+.cache/
+.mypy_cache/
+compile_commands.json
+OLD_*.py
+output/
+nb_output/
+results/
+results_backup/
+random_leftover_stuff/
+mlruns/
+tmp/

@@ -1,0 +1,83 @@
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "ivd-splat"
+version = "0.1.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Ivan Desiatov", email = "deivse@gmail.com" }]
+maintainers = [{ name = "Ivan Desiatov", email = "deivse@gmail.com" }]
+description = "Benchmarking 3DGS performance with different initialization and densification strategies."
+readme = "README.md"
+classifiers = ["Programming Language :: Python"]
+
+dependencies = [
+  "monodepth_native_modules",
+  "torch==2.9.0",
+  "torchvision>=0.24.0",
+  "numpy==1.26.4",
+  "pycolmap==3.11",
+  "pillow==10.2.0",
+  "open3d",
+  "filelock==3.19.1",
+  "huggingface_hub==0.34.4",
+  "scipy>=1.16.3",
+  "opencv-python>=4.11.0.86",
+  "tyro>=0.9.35",
+  "nerfbaselines @ git+https://github.com/deivse/nerfbaselines.git", # IF CHANGING CHANGE IN EVAL_SCRIPTS TOO
+  "mmengine>=0.10.7",
+  "scikit-image>=0.25.2",
+  "eval_scripts",
+  "transformers>=4.57.5",
+  "gsplat==1.5.3",
+  "torchmetrics>=1.8.2",
+  "tensorly>=0.9.0",
+  "mlflow>=3.9.0",
+  "plyfile>=1.1.3",
+  "awesome-depth-anything-3>=1.0.0",
+]
+optional-dependencies = { dev = [
+  "ruff",
+  "mypy",
+  "ipykernel",
+  "microsoft-python-type-stubs @ git+https://github.com/microsoft/python-type-stubs.git",
+] }
+
+[project.scripts]
+monodepth = "monodepth.main:main"
+edgs = "edgs.main:main"
+da3_init = "da3.main:main"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+monodepth_native_modules = { workspace = true }
+eval_scripts = { workspace = true }
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchmetrics = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.ruff]
+line-length = 88

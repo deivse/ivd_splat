@@ -1,0 +1,17 @@
+export GT_DATASETS_EXCEPT_ETH3D="scannet++ eval_on_train_set_scannet++"
+export GT_DATASETS="$GT_DATASETS_EXCEPT_ETH3D eth3d"
+
+export OTHER_DATASETS="mipnerf360 tanksandtemples"
+
+export ALL_DATASETS="$GT_DATASETS $OTHER_DATASETS"
+export ALL_DATASETS_EXCEPT_ETH3D="$GT_DATASETS_EXCEPT_ETH3D $OTHER_DATASETS"
+
+export EXPERIMENT_NAME="gt_pointclouds"
+export FINAL_NUM_POINTS_PER_SCENE_FILE="$RESULTS_DIR/num_points_per_scene.json"
+export INITIAL_NUM_POINTS_PER_SCENE_FILE="$RESULTS_DIR/init_sfm_pts_per_scene.json"
+export REAL_INIT_NUM_POINTS_PER_SCENE_FILE="$RESULTS_DIR/real_init_num_points_per_scene.json"
+
+export SCANNETPP_MCMC_CUSTOM_OPACITY_REG="0.0005"
+export ABSGRAD_GRAD_THRESH="0.0004"
+
+export MLFLOW_EXPERIMENT_NAME=${EXPERIMENT_NAME}

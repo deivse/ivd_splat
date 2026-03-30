@@ -1,0 +1,10 @@
+CompileFlags:
+  Remove:
+  [
+      '-rdc=true',
+      '-gencode',
+      '-forward-unknown-to-host-compiler',
+      '--generate-code=arch=compute_89,code=[compute_89,sm_89]',
+      '-Xcompiler=-fPIC',
+      '-Xcompiler=-fvisibility=hidden'
+  ]

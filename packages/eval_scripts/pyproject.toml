@@ -1,0 +1,32 @@
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "eval_scripts"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    "ivd-splat",
+    "nerfbaselines @ git+https://github.com/deivse/nerfbaselines.git", # IF CHANGING CHANGE IN MAIN TOO
+    "numpy~=1.26.4",
+    "pandas~=2.3.3",
+    "tabulate~=0.9.0",
+    "tensorboard~=2.20.0",
+    "tqdm~=4.67.1",
+    "typing-extensions~=4.15.0",
+    "tyro~=0.9.35",
+]
+
+[project.scripts]
+monodepth_results = "eval_scripts.monodepth_results:main"
+monodepth_get_remote_data = "eval_scripts.monodepth_get_remote_data:main"
+init_runner = "eval_scripts.init_runner:main"
+ivd_splat_runner = "eval_scripts.ivd_splat_runner:main"
+
+[tool.ruff]
+line-length = 88
+
+[tool.uv.sources]
+ivd-splat = { workspace = true }

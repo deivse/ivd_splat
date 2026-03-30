@@ -1,0 +1,7 @@
+{
+    "editor.formatOnSave": true,
+    "python.REPL.enableREPLSmartSend": false,
+    "files.exclude": {
+        "**/__pycache__": true
+    },
+}
