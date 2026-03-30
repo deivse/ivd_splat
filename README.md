@@ -10,31 +10,6 @@ External requirements:
 Use the `install_with_pip.sh` script to install this project and its dependencies. The script will also clone git submodules.
 Unfortunately a clean solution with a single pyproject.toml was not tenable, as some dependencies require `--no-build-isolation`.
 
-# Project structure
-
-- `src/`
-    - `ivd_splat/` - main gsplat-based Gaussian Splatting implementation
-        - `strategies/` - implementation of individual densification strategies
-        - ...
-    - `monodepth/` - Monodepth initialization, can be executed with `monodepth` command when installed (prefer using `init_runner`).
-    - `da3/` - DA3 initialization, can be executed with `da3_init` command when installed (prefer using `init_runner`).
-    - `edgs/` - EDGS* initialization, can be executed with `edgs` command when installed (prefer using `init_runner`).
-    - `shared/` - some functionality that is shared by multiple parts of the project.
-    - `mlflow_nerfbaselines_logger` - mlflow integration for NerfBaselines to enable logging training statistics and metrics to an mlflow server instance.
-    - `nerfbaselines_register.py` - utility file to register `ivd_splat` and proxy dataset readers of initialization method implementations with nerfbaselines.
-- `packages/` - first-party code that is structured as separate python projects with their own pyproject.toml files    
-    - `eval_scripts` includes orchestrator scripts to easily invoke initialization and training on any datasets/scenes with mlflow logging integration (`ivd_splat_runner`, `init_runner`), as well some results processing utilities.
-    - `native_modules` is the catch all for any native code used by the implementation, but currently only contains a C++ LO-RANSAC implementation used in `src/monodepth`.
-- `experiments` - SLURM job scheduler scripts used to run all experiments reported in the paper. See [experiments/README.md](experiments/README.md) for details.
-- `submodules/` - git submodules
-- `third-party/` - third-party code that could not be included as git submodules 
-    - `diff-gaussian-rasterization-idhfr` - modified version of diff-gaussian-rasterization used by official IDHFR implementation (https://github.com/XiaoBin2001/Improved-GS/ - `submodules.zip`)
-
-### Related repositories
-- ScanNet++ dataset integration - https://github.com/deivse/ivd_splat_scannetpp_integration
-- ETH3D dataset integration - https://github.com/deivse/ivd_splat_eth3d_integration
-- NerfBaselines fork used in this repository, which supports additional fields for datasets - https://github.com/deivse/nerfbaselines
-
 
 # Usage
 Once installed, the easiest way to replicate reported experiment results is to use the `ivd_splat_runner` and `init_runner` utilities provided by `packages/eval_scripts`. Once the
@@ -53,6 +28,33 @@ Both `init_runner` and `ivd_splat` runner are set up to log information to mlflo
 `ivd_splat` runner accepts a config parameter, which allows to specify any number of configurations that will be ran using a specialized syntax. For example, `--configs "strategy={MCMCStrategy, IDHFRStrategy}"` will result in two runs for each scene, one using MCMC and one using IDHFR.
 
 For advanced examples of using the runner scripts, please consult `--help` output of the two runner utilities, and see the real invocations in `experiments/main` used to produce the results in the paper.
+
+# Project structure
+
+### Related repositories
+- ScanNet++ dataset integration - https://github.com/deivse/ivd_splat_scannetpp_integration
+- ETH3D dataset integration - https://github.com/deivse/ivd_splat_eth3d_integration
+- NerfBaselines fork used in this repository, which supports additional fields for datasets - https://github.com/deivse/nerfbaselines
+
+### Directories & Files
+
+- `src/`
+    - `ivd_splat/` - main gsplat-based Gaussian Splatting implementation
+        - `strategies/` - implementation of individual densification strategies
+        - ...
+    - `monodepth/` - Monodepth initialization, can be executed with `monodepth` command when installed (prefer using `init_runner`).
+    - `da3/` - DA3 initialization, can be executed with `da3_init` command when installed (prefer using `init_runner`).
+    - `edgs/` - EDGS* initialization, can be executed with `edgs` command when installed (prefer using `init_runner`).
+    - `shared/` - some functionality that is shared by multiple parts of the project.
+    - `mlflow_nerfbaselines_logger` - mlflow integration for NerfBaselines to enable logging training statistics and metrics to an mlflow server instance.
+    - `nerfbaselines_register.py` - utility file to register `ivd_splat` and proxy dataset readers of initialization method implementations with nerfbaselines.
+- `packages/` - first-party code that is structured as separate python projects with their own pyproject.toml files    
+    - `eval_scripts` includes orchestrator scripts to easily invoke initialization and training on any datasets/scenes with mlflow logging integration (`ivd_splat_runner`, `init_runner`), as well some results processing utilities.
+    - `native_modules` is the catch all for any native code used by the implementation, but currently only contains a C++ LO-RANSAC implementation used in `src/monodepth`.
+- `experiments` - SLURM job scheduler scripts used to run all experiments reported in the paper. See [experiments/README.md](experiments/README.md) for details.
+- `submodules/` - git submodules
+- `third-party/` - third-party code that could not be included as git submodules 
+    - `diff-gaussian-rasterization-idhfr` - modified version of diff-gaussian-rasterization used by official IDHFR implementation (https://github.com/XiaoBin2001/Improved-GS/ - `submodules.zip`)
 
 # Future
 
