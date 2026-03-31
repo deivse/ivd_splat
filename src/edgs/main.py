@@ -11,9 +11,14 @@ from nerfbaselines.datasets import dataset_index_select, load_dataset
 
 from edgs.config import EDGSConfig
 from edgs.init import edgs_init
-from edgs.proxy_dataset import write_proxy_dataset_to_disk
+from edgs.proxy_dataset import (
+    GAUSSIANS_FILE_NAME,
+    NB_META_FILE_NAME,
+    write_proxy_dataset_to_disk,
+)
 from edgs.sh_utils import SH2RGB
 from shared.point_cloud_io import export_pointcloud_ply
+from shared.save_init_info import save_init_info_json
 from shared.serializable_config import mlflow_log_config_params
 
 
@@ -47,6 +52,11 @@ def main() -> None:
     logging.info(f"Number of 3D points: {dataset['points3D_xyz'].shape[0]}")
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    save_init_info_json(
+        config.output_dir,
+        ivd_splat_init_type="splat",
+        required_files=[GAUSSIANS_FILE_NAME, NB_META_FILE_NAME],
+    )
 
     sfm_pts = dataset["points3D_xyz"]
     sfm_rgbs = dataset["points3D_rgb"]

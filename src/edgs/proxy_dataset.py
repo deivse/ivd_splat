@@ -10,6 +10,7 @@ PROXY_DATASET_ID = "edgs"
 GAUSSIANS_FILE_NAME = "edgs_splats.ply"
 NB_META_FILE_NAME = "nb-info.json"
 
+
 def write_proxy_dataset_to_disk(
     original_dataset_str: str,
     dataset: Dataset,

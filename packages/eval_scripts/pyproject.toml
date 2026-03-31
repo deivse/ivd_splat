@@ -20,8 +20,6 @@ dependencies = [
 ]
 
 [project.scripts]
-monodepth_results = "eval_scripts.monodepth_results:main"
-monodepth_get_remote_data = "eval_scripts.monodepth_get_remote_data:main"
 init_runner = "eval_scripts.init_runner:main"
 ivd_splat_runner = "eval_scripts.ivd_splat_runner:main"
 

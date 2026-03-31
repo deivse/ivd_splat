@@ -19,7 +19,7 @@ source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 
 ivd_splat_runner --datasets $OTHER_DATASETS \
     --method ivd-splat \
-    --init_methods sfm \
+    --init_method sfm \
     --configs "strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
     --output-dir $RESULTS_DIR
 

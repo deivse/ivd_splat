@@ -3,13 +3,13 @@ Runs training and evaluation for multiple scenes and initialization strategies, 
 """
 
 from datetime import datetime
+import json
 import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
-from typing import Literal
 
 from eval_scripts.common.mlflow_setup import mlflow_runner_setup
 from eval_scripts.common.slurm import select_task_subset_if_slurm
@@ -17,9 +17,6 @@ from eval_scripts.common.subprocess import subprocess_run_tee_stderr
 from eval_scripts.common.typedefs import InitMethod
 import mlflow
 import tyro
-from edgs.config import EDGSConfig
-from monodepth.config import Config as MdTsdfFusionConfig
-from da3.config import DA3Config
 from monodepth.proxy_dataset import POINTS_FILE_NAME as MONODEPTH_POINTS_FILE_NAME
 from monodepth.proxy_dataset import NB_META_FILE_NAME as MONODEPTH_NB_META_FILE_NAME
 from da3.proxy_dataset import POINTS_FILE_NAME as DA3_POINTS_FILE_NAME
@@ -39,7 +36,8 @@ from eval_scripts.common.results_dir import (
 
 @dataclass
 class InitRunnerArguments:
-    method: Literal[InitMethod.monodepth, InitMethod.edgs, InitMethod.da3] = InitMethod.monodepth
+    method: str = InitMethod.monodepth.value
+
     # Config strings specifying which configurations to run.
     configs: list[str] = field(default_factory=lambda: [""])
     # Path to a file containing config strings to run, one per line.
@@ -58,25 +56,11 @@ class InitRunnerArguments:
     # MLFlow experiment name to log to. If not provided, will use `{method}_init`.
     mlflow_experiment: str | None = None
 
-    def get_method_config_class(self):
-        if self.method == "monodepth":
-            return MdTsdfFusionConfig
-        elif self.method == "edgs":
-            return EDGSConfig
-        elif self.method == "da3":
-            return DA3Config
-        else:
-            raise ValueError(f"Unknown init_method: {self.method}")
-
     def get_executable_name_for_init_method(self) -> str:
-        if self.method == InitMethod.monodepth:
-            return "monodepth"
-        elif self.method == InitMethod.edgs:
-            return "edgs"
-        elif self.method == InitMethod.da3:
+        if self.method == InitMethod.da3.value:
             return "da3_init"
         else:
-            raise ValueError(f"Unknown init_method: {self.method}")
+            return self.method
 
 
 CONFIG_STR_FORBIDDEN_PARAM_NAMES = {
@@ -105,24 +89,47 @@ def init_method_dir_needs_overwrite(
         return True
 
     required_files = {
-        InitMethod.monodepth: [
+        InitMethod.monodepth.value: [
             MONODEPTH_POINTS_FILE_NAME,
             MONODEPTH_NB_META_FILE_NAME,
         ],
-        InitMethod.edgs: [
+        InitMethod.edgs.value: [
             EDGS_GAUSSIANS_FILE_NAME,
             EDGS_NB_META_FILE_NAME,
         ],
-        InitMethod.da3: [
+        InitMethod.da3.value: [
             DA3_POINTS_FILE_NAME,
             DA3_NB_META_FILE_NAME,
         ],
     }
-    for file in required_files[args.method]:
-        if not (output_dir / file).exists():
-            return True
 
-    return False
+    init_info_file = output_dir / "init_info.json"
+    if init_info_file.exists():
+        init_info = json.loads(init_info_file.read_text())
+        for file in init_info.get("required_files", []):
+            if not (output_dir / file).exists():
+                ansiesc_print(
+                    f"Detected incomplete output directory (missing file {file} required according to init_info.json).",
+                    ANSIEscapes.YELLOW,
+                )
+                return True
+
+    # This is a legacy fallback for existing data before init_info.json was introduced.
+    if args.method in required_files:
+        for file in required_files[args.method]:
+            if not (output_dir / file).exists():
+                ansiesc_print(
+                    f"Detected incomplete output directory (missing required file {file} for legacy init method {args.method}).",
+                    ANSIEscapes.YELLOW,
+                )
+                return True
+        return False
+
+    ansiesc_print(
+        f"Warning: init_info.json not found and {args.method} is not a legacy init method. Will overwrite existing output.",
+        ANSIEscapes.YELLOW,
+    )
+    return True
 
 
 def add_missing_dashes(arg: str) -> str:
@@ -174,7 +181,7 @@ def run_init_method(
         f"--output-dir={init_out_dir}",
     ] + [add_missing_dashes(arg) for arg in args.extra_args]
 
-    if args.method == InitMethod.monodepth:
+    if args.method == InitMethod.monodepth.value:
         command.append(f"--cache-dir={results_dir.get_monodepth_cache_dir()}")
 
     for name, value in config:
@@ -253,12 +260,10 @@ def main():
     args = tyro.cli(InitRunnerArguments)
 
     subprocess_env = mlflow_runner_setup(
-        args.output_dir, args.mlflow_experiment or f"{args.method.value}_init"
+        args.output_dir, args.mlflow_experiment or f"{args.method}_init"
     )
 
-    configs = load_configs(
-        args.configs, args.configs_file, args.get_method_config_class()
-    )
+    configs = load_configs(args.configs, args.configs_file)
     scenes = get_scenes_from_args(args.scenes, args.datasets)
 
     combinations = sorted(list(product(scenes, configs)))

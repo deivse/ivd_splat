@@ -18,7 +18,7 @@ source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 # # 3DGS MCMC SfM
 # ivd_splat_runner --datasets $GT_DATASETS \
 #     --method ivd-splat \
-#     --init_methods sfm \
+#     --init_method sfm \
 #     --output-dir $RESULTS_DIR \
 #     --configs "strategy={MCMCStrategy}" \
 #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE 
@@ -34,7 +34,7 @@ for dataset in $GT_DATASETS; do
     # With adjusted opacity reg
     ivd_splat_runner --datasets $dataset \
         --method ivd-splat \
-        --init_methods sfm \
+        --init_method sfm \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
@@ -43,7 +43,7 @@ done
 # Without adjusted opacity reg, to confirm
 ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
     --method ivd-splat \
-    --init_methods sfm \
+    --init_method sfm \
     --output-dir $RESULTS_DIR \
     --configs "strategy={MCMCStrategy}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE

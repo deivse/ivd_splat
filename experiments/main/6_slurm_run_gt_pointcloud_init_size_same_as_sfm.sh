@@ -18,7 +18,7 @@ source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 # ADC
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --configs "strategy={DefaultWithGaussianCapStrategy} strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -28,7 +28,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # IDHFR
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --configs "strategy={IDHFRStrategy}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -46,7 +46,7 @@ for dataset in $GT_DATASETS; do
     # 3DGS MCMC with various init fractions.
     ivd_splat_runner --datasets $dataset \
         --method ivd-splat \
-        --init_methods laser_scan \
+        --init_method laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \

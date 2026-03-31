@@ -19,7 +19,7 @@ source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 
 ivd_splat_runner --datasets $OTHER_DATASETS \
     --method ivd-splat \
-    --init_methods sfm \
+    --init_method sfm \
     --output-dir $RESULTS_DIR \
     --configs "strategy={MCMCStrategy}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE

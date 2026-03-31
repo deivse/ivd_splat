@@ -20,14 +20,14 @@ Both utilities take an `--output-dir` CLI argument which specifies a directory w
 # 1. Run monodepth initialization for all scenes of mipnerf360 dataset and save output to ./results
 init_runner --output-dir results --method monodepth --datasets mipnerf360
 # 2. Run training using 3DGS-MCMC using the monodepth initialization data from ./results
-ivd_splat_runner --output-dir results --datasets mipnerf360 --configs "strategy={MCMCStrategy}" --init-methods monodepth
+ivd_splat_runner --output-dir results --datasets mipnerf360 --configs "strategy={MCMCStrategy}" --init-method monodepth
 ```
 
 Both `init_runner` and `ivd_splat` runner are set up to log information to mlflow, and will respect the "MLFLOW_TRACKING_URI" environment variable. If that variable is not set, logging will default to using a local sqlite database in `<output_dir>/mlflow.db`.
 
-`ivd_splat` runner accepts a config parameter, which allows to specify any number of configurations that will be ran using a specialized syntax. For example, `--configs "strategy={MCMCStrategy, IDHFRStrategy}"` will result in two runs for each scene, one using MCMC and one using IDHFR.
+`ivd_splat_runner` and `init_runner` accept config string parameters, which allow to specify configuration overrides for ivd_splat or the initialization method respectively. Each config string can specify multiple values for a parameter, and the runner will execute initialization or training once for each possible parameter combination. For example, `--configs "strategy={MCMCStrategy, IDHFRStrategy}"` will result in two runs for each scene, one using MCMC and one using IDHFR. Additionally, if running via SLURM in an array context, the runners will automatically calculate which array job should run which tasks and only run the tasks (configurations) assigned to their job id (the allocations are static, nothing fancy like work stealing).
 
-For advanced examples of using the runner scripts, please consult `--help` output of the two runner utilities, and see the real invocations in `experiments/main` used to produce the results in the paper.
+For advanced examples of using the runner scripts, please consult the `--help` output of the two runner utilities, and see the real invocations in `experiments/main` used to produce the results in the paper.
 
 # Project structure
 

@@ -13,8 +13,13 @@ from nerfbaselines._types import Dataset
 from nerfbaselines.datasets import load_dataset
 
 from monodepth.generate_pointcloud import monocular_depth_init
-from monodepth.proxy_dataset import write_proxy_dataset_to_disk
+from monodepth.proxy_dataset import (
+    NB_META_FILE_NAME,
+    POINTS_FILE_NAME,
+    write_proxy_dataset_to_disk,
+)
 from shared.point_cloud_io import export_pointcloud_ply
+from shared.save_init_info import save_init_info_json
 from shared.serializable_config import mlflow_log_config_params
 
 
@@ -159,6 +164,11 @@ def main() -> None:
 
     config.process()
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    save_init_info_json(
+        config.output_dir,
+        ivd_splat_init_type="dense",
+        required_files=[POINTS_FILE_NAME, NB_META_FILE_NAME],
+    )
 
     mlflow_run = mlflow_log_config_params(config)
 

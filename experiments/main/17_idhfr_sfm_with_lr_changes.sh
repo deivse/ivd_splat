@@ -19,7 +19,7 @@ source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 # Original:                                                  0.00016                          0.0000016             
 ivd_splat_runner --datasets $ALL_DATASETS \
     --method ivd-splat \
-    --init_methods sfm \
+    --init_method sfm \
     --output-dir $RESULTS_DIR \
     --configs "strategy={IDHFRStrategy} means_lr_init={0.00004} means_lr_final={0.000002}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE

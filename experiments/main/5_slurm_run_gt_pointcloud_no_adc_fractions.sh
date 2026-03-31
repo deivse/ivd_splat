@@ -20,7 +20,7 @@ INIT_FRACTIONS="0.5, 0.75"
 
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --configs "strategy={DefaultWithoutADCStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
