@@ -27,7 +27,7 @@ SAMPLING_TYPES="uniform"
 # No ADC
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --configs "strategy={DefaultWithoutADCStrategy} dense_init.sampling={$SAMPLING_TYPES}"
@@ -35,7 +35,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # ADC (with absgrad by default) 
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -44,7 +44,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # IDHFR
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -53,7 +53,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # With various init sizes and ADC (with absgrad by default)
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -62,7 +62,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # With various init sizes and IDHFR
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -74,7 +74,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # No ADC with noise
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --configs "strategy={DefaultWithoutADCStrategy} dense_init.sampling={$SAMPLING_TYPES} init.position_noise_std={$POS_NOISE_SCALES}"
@@ -82,7 +82,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # ADC (with absgrad by default) with noise at 0.5 init size
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -91,7 +91,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # IDHFR with noise at 0.5 init size
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
-    --init_methods laser_scan \
+    --init_method laser_scan \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -100,7 +100,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # # ADC (with absgrad by default) with noise
 # ivd_splat_runner --datasets $GT_DATASETS \
 #     --method ivd-splat \
-#     --init_methods laser_scan \
+#     --init_method laser_scan \
 #     --output-dir $RESULTS_DIR \
 #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
 #     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -109,7 +109,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
 # # With various init sizes and ADC (with absgrad by default) with noise
 # ivd_splat_runner --datasets $GT_DATASETS \
 #     --method ivd-splat \
-#     --init_methods laser_scan \
+#     --init_method laser_scan \
 #     --output-dir $RESULTS_DIR \
 #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
 #     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \

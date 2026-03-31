@@ -23,7 +23,6 @@ from eval_scripts.common.slurm import select_task_subset_if_slurm
 from eval_scripts.common.subprocess import subprocess_run_tee_stderr
 import mlflow
 import tyro
-from ivd_splat.config import Config as IVDSplatConfig
 
 from eval_scripts.common.ansi_escapes import ANSIEscapes, ansiesc_print
 from eval_scripts.common.dataset_scenes import (
@@ -37,14 +36,14 @@ from eval_scripts.common.results_dir import (
 )
 from eval_scripts.common.typedefs import InitMethod
 
+from shared.save_init_info import INIT_INFO_JSON_FILENAME
+
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class IVDRunnerArguments:
-    init_methods: list[InitMethod] = field(
-        default_factory=lambda: [InitMethod.laser_scan]
-    )
+    init_method: str = InitMethod.sfm.value
     # List of actions to perform. 'train' - training + evaluation, 'eval' - only evaluation.
     actions: list[typing.Literal["train", "eval"]] = field(
         default_factory=lambda: ["train"]
@@ -52,7 +51,7 @@ class IVDRunnerArguments:
 
     # MLflow experiment name. If not set and MLFLOW_EXPERIMENT_NAME env var not set, defaults to "Default".
     mlflow_experiment: typing.Optional[str] = None
-    # Nerfbaselines method identifier, the method will be trained on the produced outputs.
+    # Nerfbaselines method identifier, nothing except ivd-splat is really supported at the moment.
     method: str = "ivd-splat"
 
     init_method_config: str = "default"
@@ -240,11 +239,11 @@ def load_num_points_per_scene(
 
 def get_data_and_config_overrides_for_init_method(
     results_dir: ResultsDirectory,
-    init_method: InitMethod,
+    init_method: str,
     scene: str,
     args: IVDRunnerArguments,
 ) -> tuple[str, ParamList]:
-    def append_target_num_points_if_needed(overrides: list[tuple[str, str]]):
+    def append_target_num_points_if_available(overrides: list[tuple[str, str]]):
         if args.init_size_per_scene_file is not None:
             target_num_points = load_num_points_per_scene(
                 args.init_size_per_scene_file
@@ -252,40 +251,59 @@ def get_data_and_config_overrides_for_init_method(
             overrides.append(("dense_init.target_num_points", str(target_num_points)))
         else:
             logging.warning(
-                f"init_size_per_scene_file not provided for {init_method.value} initialization, using default settings for number of points (probably all points)."
+                f"init_size_per_scene_file not provided for {init_method} initialization, using default settings for number of points (probably all points)."
             )
 
-    if args.method.replace("_", "-") != "ivd-splat":
-        logging.warning(
-            f"Training with method other than ivd-splat, skipping config overrides for init method {init_method.value}."
-        )
-        return scene_id_to_nerfbaselines_data_value(scene), ParamList(())
-    if init_method == InitMethod.sfm:
+    if init_method == InitMethod.sfm.value:
+        # Here, there's no additional data and ivd_splat will load the dataset and use its features
         return scene_id_to_nerfbaselines_data_value(scene), ParamList(
             (("init_type", "sparse"),)
         )
-    if init_method == InitMethod.laser_scan:
+    if init_method == InitMethod.laser_scan.value:
+        # Here, the additional data is part of the dataset and ivd_splat will
+        # use the dense points path from there.
         overrides = [("init_type", "dense")]
-        append_target_num_points_if_needed(overrides)
+        append_target_num_points_if_available(overrides)
 
         return scene_id_to_nerfbaselines_data_value(scene), ParamList(overrides)
-    if init_method in (InitMethod.monodepth, InitMethod.da3):
-        overrides = [("init_type", "dense")]
-        append_target_num_points_if_needed(overrides)
 
-        init_dir = results_dir.get_init_method_output_dir(
-            scene, args.init_method_config, init_method
-        )
+    # Other methods create their own proxy dataset with additional data.
+
+    init_dir = results_dir.get_init_method_output_dir(
+        scene, args.init_method_config, init_method
+    )
+
+    init_info_path = init_dir / INIT_INFO_JSON_FILENAME
+    if init_info_path.exists():
+        with init_info_path.open("r") as f:
+            init_info = json.load(f)
+        init_type = init_info["init_type"]
+        overrides = [("init_type", init_type)]
+        if init_type in ["dense", "splat"]:
+            append_target_num_points_if_available(overrides)
         return str(init_dir), ParamList(overrides)
-    if init_method == InitMethod.edgs:
-        overrides = [("init_type", "splat")]
-        append_target_num_points_if_needed(overrides)
+    else:
+        # Fallback to support legacy outputs that didn't have init_info.json
+        if init_method in (InitMethod.monodepth.value, InitMethod.da3.value):
+            overrides = [("init_type", "dense")]
+            append_target_num_points_if_available(overrides)
 
-        edgs_output_dir = results_dir.get_edgs_output_dir(
-            scene, args.init_method_config
-        )
-        return str(edgs_output_dir), ParamList(overrides)
-    raise RuntimeError(f"Unknown init method: {init_method}")
+            init_dir = results_dir.get_init_method_output_dir(
+                scene, args.init_method_config, init_method
+            )
+            return str(init_dir), ParamList(overrides)
+        if init_method == InitMethod.edgs.value:
+            overrides = [("init_type", "splat")]
+            append_target_num_points_if_available(overrides)
+
+            edgs_output_dir = results_dir.get_init_method_output_dir(
+                scene, args.init_method_config, init_method
+            )
+            return str(edgs_output_dir), ParamList(overrides)
+
+    raise RuntimeError(
+        f"{init_info_path} does not exist, and no legacy fallback available for init method {init_method}. Cannot determine data value or config overrides."
+    )
 
 
 def add_final_step_metric_to_mlflow_run(run: mlflow.ActiveRun):
@@ -328,7 +346,7 @@ def should_train(
 
 def process_combination(
     scene: str,
-    init_method: InitMethod,
+    init_method: str,
     config: ParamList,
     args: IVDRunnerArguments,
     eval_all_iters: list[int],
@@ -404,7 +422,7 @@ def process_combination(
             interrupted = e
         except Exception as e:
             print(
-                f"Error during {stage_name} with {init_method.value} initialization for {config_name} on {scene}: {e}"
+                f"Error during {stage_name} with {init_method} initialization for {config_name} on {scene}: {e}"
             )
 
     if "train" in args.actions and should_train(
@@ -426,7 +444,7 @@ def process_combination(
 
             mlflow.log_param("scene", scene)
             mlflow.log_param("method", args.method)
-            mlflow.log_param("init_method", init_method.value)
+            mlflow.log_param("init_method", init_method)
             mlflow.log_param("init_method_config", args.init_method_config)
             mlflow.log_param("gaussian_cap_fraction", args.gaussian_cap_fraction)
             for param in args.extra_tags:
@@ -483,17 +501,15 @@ def main():
 
     args = tyro.cli(IVDRunnerArguments)
 
-    configs = load_configs(args.configs, args.configs_file, IVDSplatConfig)
+    configs = load_configs(args.configs, args.configs_file)
     scenes = get_scenes_from_args(args.scenes, args.datasets)
 
-    combinations = sorted(list(product(scenes, args.init_methods, configs)))
+    combinations = sorted(list(product(scenes, configs)))
     combinations = select_task_subset_if_slurm(combinations)
 
     subprocess_env = mlflow_runner_setup(args.output_dir, args.mlflow_experiment)
 
-    scenes, init_methods, configs = (
-        zip(*combinations) if len(combinations) > 0 else ([], [], [])
-    )
+    scenes, configs = zip(*combinations) if len(combinations) > 0 else ([], [])
 
     print(
         ANSIEscapes.format("_" * 80, "bold"),
@@ -512,18 +528,23 @@ def main():
             "cyan",
         ),
         f"\tScenes: {ANSIEscapes.format(scenes, 'cyan')}",
-        f"\tInit methods: {ANSIEscapes.format(init_methods, 'cyan')}",
+        f"\tInit method: {ANSIEscapes.format(args.init_method, 'cyan')}",
         sep="\n",
     )
 
-    for scene, init_method, config in combinations:
+    for scene, config in combinations:
         try:
             process_combination(
-                scene, init_method, config, args, get_eval_it_list(args), subprocess_env
+                scene,
+                args.init_method,
+                config,
+                args,
+                get_eval_it_list(args),
+                subprocess_env,
             )
         except Exception as e:
             logging.error(
-                f"Error processing combination of scene {scene}, init method {init_method.value}, config {config}: {e}"
+                f"Error processing combination of scene {scene}, init method {args.init_method}, config {config}: {e}"
             )
             logging.error(traceback.format_exc())
             print(

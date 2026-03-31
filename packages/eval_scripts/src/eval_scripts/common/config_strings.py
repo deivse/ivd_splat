@@ -1,16 +1,7 @@
-from enum import Enum
 import itertools
 from pathlib import Path
-from types import NoneType
-from typing import Any, ClassVar, Dict, Protocol, Self
-from dataclasses import fields
+from typing import Self
 import typing
-
-
-class IsDataclass(Protocol):
-    # as already noted in comments, checking for this attribute is currently
-    # the most reliable way to ascertain that something is a dataclass
-    __dataclass_fields__: ClassVar[Dict[str, Any]]
 
 
 ParsedConfigStr = list[tuple[str, list[str]]]
@@ -48,7 +39,9 @@ class ParamList:
         return ParamList((*new_params, *(self.__values or ())))
 
     def make_config_name(
-        self, renames: dict[str, str | None], extra_tags: list[str] | None = None,
+        self,
+        renames: dict[str, str | None],
+        extra_tags: list[str] | None = None,
     ) -> str:
         """
         Create a config name suitable for use in directory names from a ParamList.
@@ -83,21 +76,19 @@ class ParamList:
         out = [x.replace("/", "_") for x in out]
 
         return "_".join(out)
-    
+
     def __lt__(self, other: "ParamList") -> bool:
         return self.__values < other.__values
 
 
 def load_configs(
-    config_strings: list[str], configs_file: str | None, config_type: IsDataclass
+    config_strings: list[str], configs_file: str | None
 ) -> list[ParamList]:
     """
     Load config strings from either a list of strings or a file, and parse them into ParamLists.
     Args:
         config_strings: List of config strings from CLI, or an empty list
         configs_file: Path to a file containing config strings from cli, one per line, or None
-        config_type: Dataclass type with type hints for all config parameters, used to determine possible values of a
-        parameter when special tokens like [ALL] are used in a config string.
     Raises:
         ValueError: If both or neither of config_str and configs_file are specified.
     Returns:
@@ -105,7 +96,7 @@ def load_configs(
     """
     param_lists: list[ParamList] = []
     for config_str in _load_configs_from_args(config_strings, configs_file):
-        param_lists.extend(_parse_config_string(config_str, config_type))
+        param_lists.extend(_parse_config_string(config_str))
     return list(set(param_lists))  # deduplicate
 
 
@@ -138,14 +129,11 @@ def _load_configs_from_args(configs: list[str], configs_file: str | None) -> lis
         ]
 
 
-def _parse_config_string(config_str: str, config_type: IsDataclass) -> list[ParamList]:
+def _parse_config_string(config_str: str) -> list[ParamList]:
     """
-    # Configs string examples
-    <default> - special value meaning default config
+    Parse a config string into a list of ParamLists, one for each combination of parameters specified by the config string.
     # Basic example
     --alignment-method={ransac,msac}
-    # Special value example
-    --predictor=[ALL]
     """
 
     if config_str.strip() == "<default>" or config_str.strip() == "":
@@ -182,8 +170,6 @@ def _parse_config_string(config_str: str, config_type: IsDataclass) -> list[Para
     if current_part:
         parts.append(current_part)
 
-    ALL = "[ALL]"
-    special_val_handlers = {ALL: _make_all_possible_vals_getter(config_type)}
     parsed: ParsedConfigStr = []
     for part in parts:
         eq_pos = part.find("=")
@@ -194,18 +180,6 @@ def _parse_config_string(config_str: str, config_type: IsDataclass) -> list[Para
             )
         name = part[:eq_pos].removeprefix("-").removeprefix("-")
         name = name.replace("-", "_")
-
-        found_special_val = False
-        for val, handler in special_val_handlers.items():
-            full_values_part = part[eq_pos + 1 :]
-            if full_values_part == val:
-                values = handler(name)
-                if len(values) != 0:
-                    parsed.append((name, values))
-                found_special_val = True
-                break
-        if found_special_val:
-            continue
 
         if part[eq_pos + 1] == "{":  # List of options
             if not part[-1] == "}":
@@ -230,53 +204,3 @@ def _parse_config_string(config_str: str, config_type: IsDataclass) -> list[Para
     }
     # Pass through set to deduplicate
     return list(set(all_combinations))
-
-
-def _make_all_possible_vals_getter(config_type: IsDataclass):
-    def get_all_possible_vals(name: str) -> list[str]:
-        name = name.replace("-", "_")
-        address_parts = name.split(".")
-        curr_type: typing.Any = config_type
-        for field_name in address_parts:
-            curr_type = {field.name: field.type for field in fields(curr_type)}[
-                field_name
-            ]
-
-        def raise_if_empty(vals):
-            if len(vals) == 0:
-                raise RuntimeError(
-                    f"List of all possible values for param {name} is empty."
-                )
-            return vals
-
-        def raise_unsupported():
-            raise ValueError(
-                f"Can't get all possible values of param {name}. Unsupported type: {curr_type}"
-            )
-
-        if typing.get_origin(curr_type) is typing.Union:
-            args = typing.get_args(curr_type)
-            if all(isinstance(x, str) for x in args):
-                return raise_if_empty(list(args))
-            if len(args) == 2 and args[1] is NoneType:
-                curr_type = args[0]
-            else:
-                raise_unsupported()
-
-        try:
-            if issubclass(curr_type, Enum):
-                return raise_if_empty([str(member.value) for member in list(curr_type)])
-        except TypeError:
-            pass
-
-        try:
-            args = typing.get_args(curr_type)
-            if all(isinstance(x, str) for x in args):
-                return raise_if_empty(list(args))
-        except Exception:
-            pass
-
-        raise_unsupported()
-        assert False, "Unreachable"
-
-    return get_all_possible_vals

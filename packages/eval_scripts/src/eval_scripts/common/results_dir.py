@@ -2,7 +2,6 @@ import datetime
 import os
 from pathlib import Path
 
-from eval_scripts.common.typedefs import InitMethod
 from shared.scene_subdir import get_scene_subdir
 
 
@@ -13,8 +12,6 @@ def get_default_results_dir() -> Path:
 
 
 class ResultsDirectory:
-    TSDF_FUSION_DIR_NAME = "monodepth"
-    EDGS_DIR_NAME = "edgs"
     TSDF_FUSION_CACHE_DIR_NAME = "__monodepth_cache__"
 
     def __init__(self, base_dir: Path | str):
@@ -30,64 +27,14 @@ class ResultsDirectory:
         """
         return self.base_dir / get_scene_subdir(scene)
 
-    def get_monodepth_output_dir(self, scene: str, monodepth_config_name: str) -> Path:
-        """
-        Get the directory for md-tsdf-fusion outputs for a specific scene and config.
-        Args:
-            scene: The scene id in form dataset/scene, as supported by scene_id_to_nerfbaselines_data_value.
-            config_name: The config string used for md-tsdf-fusion, sanitized for filesystem usage.
-        Returns:
-            Path to the md-tsdf-fusion output directory.
-        """
-        return (
-            self.get_scene_dir(scene)
-            / ResultsDirectory.TSDF_FUSION_DIR_NAME
-            / monodepth_config_name
-        )
-
-    def get_edgs_output_dir(self, scene: str, edgs_config_name: str) -> Path:
-        """
-        Get the directory for EDGS outputs for a specific scene.
-        Args:
-            scene: The scene id in form dataset/scene, as supported by scene_id_to_nerfbaselines_data_value.
-            edgs_config_name: The config string used for EDGS, sanitized for filesystem usage.
-        Returns:
-            Path to the EDGS output directory.
-        """
-        return (
-            self.get_scene_dir(scene)
-            / ResultsDirectory.EDGS_DIR_NAME
-            / edgs_config_name
-        )
-
-    def get_da3_output_dir(self, scene: str, da3_config_name: str) -> Path:
-        """
-        Get the directory for DA3 outputs for a specific scene.
-        Args:
-            scene: The scene id in form dataset/scene, as supported by scene_id_to_nerfbaselines_data_value.
-            da3_config_name: The config string used for DA3, sanitized for filesystem usage.
-        Returns:
-            Path to the DA3 output directory.
-        """
-        return self.get_scene_dir(scene) / "da3" / da3_config_name
-
-    def get_init_method_output_dir(
-        self, scene, config_name, init_method: InitMethod
-    ) -> Path:
-        if init_method == InitMethod.monodepth:
-            return self.get_monodepth_output_dir(scene, config_name)
-        elif init_method == InitMethod.edgs:
-            return self.get_edgs_output_dir(scene, config_name)
-        elif init_method == InitMethod.da3:
-            return self.get_da3_output_dir(scene, config_name)
-        else:
-            raise ValueError(f"Unknown init_method: {init_method}")
+    def get_init_method_output_dir(self, scene, config_name, init_method: str) -> Path:
+        return self.get_scene_dir(scene) / init_method / config_name
 
     def get_method_output_dir(
         self,
         scene: str,
         method: str,
-        init_method: InitMethod,
+        init_method: str,
         init_method_config_id: str | None = None,
         method_config_id: str | None = None,
     ) -> Path:
@@ -102,7 +49,7 @@ class ResultsDirectory:
         Returns:
             Path to the nerfbaselines method output directory.
         """
-        dir = self.get_scene_dir(scene) / method / init_method.value
+        dir = self.get_scene_dir(scene) / method / init_method
         init_method_config_id = init_method_config_id or "default"
         method_config_id = method_config_id or "default"
 

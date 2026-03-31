@@ -23,7 +23,7 @@ ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method ivd-splat \
     --output-dir $RESULTS_DIR \
     --configs "strategy={DefaultWithoutADCStrategy}" \
-    --init_methods $INIT_METHOD \
+    --init_method $INIT_METHOD \
     --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE
 
 # ADC (with absgrad by default) 
@@ -31,7 +31,7 @@ ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method ivd-splat \
     --output-dir $RESULTS_DIR \
     --configs "strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
-    --init_methods $INIT_METHOD \
+    --init_method $INIT_METHOD \
     --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
@@ -40,7 +40,7 @@ ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method ivd-splat \
     --output-dir $RESULTS_DIR \
     --configs "strategy={IDHFRStrategy}" \
-    --init_methods $INIT_METHOD \
+    --init_method $INIT_METHOD \
     --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
@@ -57,7 +57,7 @@ for dataset in $ALL_DATASETS_EXCEPT_ETH3D; do
         --method ivd-splat \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} $opacity_reg_config" \
-        --init_methods $INIT_METHOD \
+        --init_method $INIT_METHOD \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 done
