@@ -14,9 +14,8 @@ from ivd_splat.strategies import (
     DefaultWithoutADCStrategy,
     MCMCStrategy,
 )
-from ivd_splat.strategies.mcmc_config_overrides import (
-    override_default_config_vals_for_mcmc,
-)
+
+# TODO: delete this altogether? Or test it still works without nerfbaselines
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
@@ -49,8 +48,6 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
 
 def run_with_config(cfg: Config):
-    cfg.adjust_steps(cfg.steps_scaler)
-
     # try import extra dependencies
     if cfg.compression == "png":
         try:
@@ -101,7 +98,8 @@ if __name__ == "__main__":
             ),
         ),
     }
-    override_default_config_vals_for_mcmc(configs["mcmc"][1])
+
+    # TODO: refactor this so it works similar to nerfbaselines integration and can pick up custom configs.
 
     logging.basicConfig(level=logging.INFO)
     cfg = tyro.extras.overridable_config_cli(configs)

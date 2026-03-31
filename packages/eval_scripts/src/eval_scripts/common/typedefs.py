@@ -6,4 +6,4 @@ class InitMethod(str, Enum):
     monodepth = "monodepth"
     edgs = "edgs"
     da3 = "da3"
-    gt_pointcloud = "gt_pointcloud"
+    laser_scan = "laser_scan"

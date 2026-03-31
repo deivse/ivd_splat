@@ -1,15 +1,13 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Literal, Union, Tuple
+import dataclasses
+import logging
+from typing import Optional, List, Literal, Tuple
 import typing
-from typing_extensions import assert_never
 
-from ivd_splat.strategies import (
-    DefaultWithGaussianCapStrategy,
-    DefaultWithoutADCStrategy,
-    MCMCStrategy,
-    IDHFRStrategy,
-)
+from ivd_splat.strategies import DefaultWithGaussianCapStrategy, IVDSplatBaseStrategy
 from shared.serializable_config import SerializableConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -100,7 +98,7 @@ class Config(SerializableConfig):
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
 
-    # NOTE: These dataset parameters are ignored when runnin with nerfbaselines.
+    # NOTE: These dataset parameters are ignored when running with nerfbaselines.
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
@@ -124,8 +122,6 @@ class Config(SerializableConfig):
 
     # Batch size for training. Learning rates are scaled automatically
     batch_size: int = 1
-    # A global factor to scale the number of training steps
-    steps_scaler: float = 1.0
 
     # Number of training steps
     max_steps: int = 30_000
@@ -156,12 +152,9 @@ class Config(SerializableConfig):
     far_plane: float = 1e10
 
     # Strategy for GS densification
-    strategy: Union[
-        DefaultWithGaussianCapStrategy,
-        DefaultWithoutADCStrategy,
-        MCMCStrategy,
-        IDHFRStrategy,
-    ] = field(default_factory=DefaultWithGaussianCapStrategy)
+    strategy: IVDSplatBaseStrategy = field(
+        default_factory=DefaultWithGaussianCapStrategy
+    )
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -227,40 +220,50 @@ class Config(SerializableConfig):
     # Background color for rendering
     background_color: Optional[Tuple[float, float, float]] = None
 
-    def adjust_steps(self, factor: float):
-        self.eval_steps = [int(i * factor) for i in self.eval_steps]
-        self.save_steps = [int(i * factor) for i in self.save_steps]
-        self.max_steps = int(self.max_steps * factor)
-        self.sh_degree_interval = int(self.sh_degree_interval * factor)
+    def __post_init__(self):
+        strategy_overrides = self.strategy.get_default_config_overrides()
+        for k, v in strategy_overrides.items():
+            key_sequence = k.split(".")
+            cfg = self
+            try:
+                for key in key_sequence[:-1]:
+                    cfg = getattr(cfg, key)
+                value = getattr(cfg, key_sequence[-1])
+            except AttributeError as e:
+                raise AttributeError(
+                    f"Invalid config override key {k} from strategy {type(self.strategy).__name__}"
+                ) from e
 
-        strategy = self.strategy
-        if isinstance(
-            strategy,
-            (DefaultWithGaussianCapStrategy, DefaultWithoutADCStrategy, IDHFRStrategy),
-        ):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, MCMCStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        else:
-            assert_never(strategy)
+            # ensure cfg is a dataclass
+            if not dataclasses.is_dataclass(cfg):
+                raise ValueError(
+                    f"Strategy config overrides only support dataclasses, but {type(cfg)} is not a dataclass (key {k} from strategy {type(self.strategy).__name__})"
+                )
+            field = [f for f in dataclasses.fields(cfg) if f.name == key_sequence[-1]][
+                0
+            ]
+            default_value = (
+                field.default
+                if field.default is not dataclasses.MISSING
+                else (
+                    field.default_factory()
+                    if field.default_factory is not dataclasses.MISSING
+                    else None
+                )
+            )
+            if value != default_value:
+                _LOGGER.info(
+                    f"Config field {k} is set to {value}, not overriding with strategy {type(self.strategy).__name__} default value {default_value}"
+                )
+            else:
+                setattr(cfg, key_sequence[-1], v)
+                _LOGGER.info(
+                    f"Overriding config field {k} with strategy {type(self.strategy).__name__} default value {v}"
+                )
 
     def to_dict(self):
         retval = super().to_dict()
-        if isinstance(self.strategy, DefaultWithGaussianCapStrategy):
-            retval["strategy_"] = "DefaultWithGaussianCapStrategy"
-        elif isinstance(self.strategy, DefaultWithoutADCStrategy):
-            retval["strategy_"] = "DefaultWithoutADCStrategy"
-        elif isinstance(self.strategy, MCMCStrategy):
-            retval["strategy_"] = "MCMCStrategy"
-        elif isinstance(self.strategy, IDHFRStrategy):
-            retval["strategy_"] = "IDHFRStrategy"
-        else:
-            raise ValueError(f"Unknown strategy type: {type(self.strategy)}")
+        retval["strategy_"] = type(self.strategy).__name__
         return retval
 
     def to_flat_dict(self):

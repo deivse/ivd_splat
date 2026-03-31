@@ -43,7 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class IVDRunnerArguments:
     init_methods: list[InitMethod] = field(
-        default_factory=lambda: [InitMethod.gt_pointcloud]
+        default_factory=lambda: [InitMethod.laser_scan]
     )
     # List of actions to perform. 'train' - training + evaluation, 'eval' - only evaluation.
     actions: list[typing.Literal["train", "eval"]] = field(
@@ -58,12 +58,12 @@ class IVDRunnerArguments:
     init_method_config: str = "default"
 
     # Json file containing mapping from scene id to number of points to use for initialization.
-    # If set, will be used to set a per-scene cap on the number of gaussians for gt_pointcloud initialization.
+    # If set, will be used to set a per-scene cap on the number of gaussians for laser_scan initialization.
     gaussian_cap_per_scene_file: str | None = None
     # Fraction of number of gaussians from `gaussian_cap_per_scene_file` to use as `strategy.cap_max`.
     gaussian_cap_fraction: float = 1.0
-    # Json file containing mapping from scene id to number of SfM points, used for gt_pointcloud initialization.
-    # If not set, gt_pointcloud init will use default settings (all points, I think).
+    # Json file containing mapping from scene id to number of SfM points, used for laser_scan initialization.
+    # If not set, laser_scan init will use default settings (all points, I think).
     init_size_per_scene_file: str | None = None
 
     # Config strings specifying which configurations of the method to run.
@@ -229,7 +229,7 @@ def load_num_points_per_scene(
 ) -> dict[str, int]:
     if path is None:
         raise RuntimeError(
-            "num_points_per_scene_file must be provided to use gt_pointcloud initialization."
+            "num_points_per_scene_file must be provided to use laser_scan initialization."
         )
 
     with open(path, "r") as f:
@@ -264,7 +264,7 @@ def get_data_and_config_overrides_for_init_method(
         return scene_id_to_nerfbaselines_data_value(scene), ParamList(
             (("init_type", "sparse"),)
         )
-    if init_method == InitMethod.gt_pointcloud:
+    if init_method == InitMethod.laser_scan:
         overrides = [("init_type", "dense")]
         append_target_num_points_if_needed(overrides)
 

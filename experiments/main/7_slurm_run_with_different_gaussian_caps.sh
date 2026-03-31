@@ -59,7 +59,7 @@ for fract in $GAUSSIAN_CAP_FRACTIONS; do
 
     ivd_splat_runner --datasets $GT_DATASETS \
         --method ivd-splat \
-        --init_methods gt_pointcloud \
+        --init_methods laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={DefaultWithGaussianCapStrategy} dense_init.target_points_fraction={0.5} strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -68,7 +68,7 @@ for fract in $GAUSSIAN_CAP_FRACTIONS; do
 
     ivd_splat_runner --datasets $GT_DATASETS \
         --method ivd-splat \
-        --init_methods gt_pointcloud \
+        --init_methods laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={IDHFRStrategy} dense_init.target_points_fraction={0.5}" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -86,7 +86,7 @@ for fract in $GAUSSIAN_CAP_FRACTIONS; do
         # 3DGS MCMC with various init fractions.
         ivd_splat_runner --datasets $dataset \
             --method ivd-splat \
-            --init_methods gt_pointcloud \
+            --init_methods laser_scan \
             --output-dir $RESULTS_DIR \
             --configs "strategy={MCMCStrategy} dense_init.target_points_fraction={0.5} $opacity_reg_config" \
             --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \

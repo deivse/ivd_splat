@@ -32,6 +32,8 @@ from torch.nn import functional as F
 
 from ivd_splat.nerfbaselines_integration.parser import NerfbaselinesParser
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def numpy_to_base64(array: np.ndarray) -> str:
     with io.BytesIO() as f:
@@ -531,9 +533,17 @@ class IVDSplat(Method):
             self.runner_module.setup_train()
 
     def _get_config(self, checkpoint, config_overrides):
+        # TODO: this definitely breaks if we dont use python nerfbaselines backend
+        import ivd_splat.strategies as strategies  # type: ignore
+
+        strategy = getattr(
+            strategies,
+            config_overrides.get("strategy", "DefaultWithGaussianCapStrategy"),
+        )(verbose=True)
         cfg = self.runner_module.Config(
-            strategy=self.runner_module.DefaultWithGaussianCapStrategy(verbose=True),
+            strategy=strategy,
         )
+        # TODO: apply strategy config overrides? Or does config do it automagically now?
         cfg.data_factor = 1
         cfg.disable_viewer = True
 
@@ -547,15 +557,6 @@ class IVDSplat(Method):
 
         # Apply config overrides
         field_types = {k.name: k.type for k in dataclasses.fields(cfg)}
-        if "strategy" in (config_overrides or {}):
-            import ivd_splat.strategies as strategies  # type: ignore
-
-            cfg.strategy = getattr(strategies, config_overrides["strategy"])(
-                verbose=True
-            )
-            if "mcmc" in config_overrides["strategy"].lower():
-                strategies.override_default_config_vals_for_mcmc(cfg)
-
         k: str
         for k, v in (config_overrides or {}).items():
             if k == "strategy":
@@ -567,13 +568,13 @@ class IVDSplat(Method):
                 parent_prop_types = {k.name: k.type for k in dataclasses.fields(parent)}
                 key_relative_to_parent = k[last_dot_index + 1 :]
                 v = cast_value(parent_prop_types[key_relative_to_parent], v)
+                _LOGGER.info(f"Overriding config field '{k}' with value '{v}'")
                 setattr(parent, key_relative_to_parent, v)
             else:
                 v = cast_value(field_types[k], v)
                 setattr(cfg, k, v)
+                _LOGGER.info(f"Overriding config field '{k}' with value '{v}'")
 
-        cfg.adjust_steps(cfg.steps_scaler)
-        cfg.steps_scaler = 1.0  # We have already adjusted the steps
         if cfg.pose_opt:
             warnings.warn(
                 "Pose optimization is enabled, but it will only by applied to training images. No test-time pose optimization is enabled."

@@ -28,7 +28,7 @@ def load_num_points_per_scene(
 ) -> dict[str, int]:
     if path is None:
         raise RuntimeError(
-            "num_points_per_scene_file must be provided to use gt_pointcloud initialization."
+            "num_points_per_scene_file must be provided to use laser_scan initialization."
         )
 
     with open(path, "r") as f:
