@@ -1,4 +1,4 @@
-# License Notice: Based on gsplat examples, which is licensed under Apache 2.0.
+# License Notice: Initially based on gsplat examples, which are licensed under Apache 2.0.
 import json
 import logging
 import math
@@ -8,7 +8,6 @@ from collections import defaultdict
 from typing import Dict, Optional, Tuple
 
 import imageio
-import mlflow
 from ivd_splat.initialization import (
     init_load_normals,
     init_load_pts_and_rgbs,
@@ -30,7 +29,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from typing_extensions import assert_never
 
 from ivd_splat.config import Config
 from ivd_splat.datasets.colmap import Dataset, Parser
@@ -45,12 +43,7 @@ from ivd_splat.lib_bilagrid import (
     slice,
     total_variation_loss,
 )
-from ivd_splat.strategies import (
-    DefaultWithoutADCStrategy,
-    DefaultWithGaussianCapStrategy,
-    MCMCStrategy,
-)
-from ivd_splat.strategies.idhfr import IDHFRStrategy
+from ivd_splat.strategies import IVDSplatBaseStrategy
 from ivd_splat.utils.runner_utils import (
     AppearanceOptModule,
     CameraOptModule,
@@ -103,13 +96,11 @@ def create_splats_with_optimizers(
             f"Initialization with normals is not supported for init type {config.init_type}"
         )
 
-    if (
-        hasattr(config.strategy, "cap_max") and config.strategy.cap_max > 0
-        and config.strategy.cap_max < init_splat_data.means.shape[0]
-    ):
+    strat_cap_max = config.strategy.get_cap_max()
+    if strat_cap_max is not None and strat_cap_max < init_splat_data.means.shape[0]:
         # Better to throw to find this out asap as it indicates invalid experiment design.
         raise RuntimeError(
-            f"Number of initial splats ({init_splat_data.means.shape[0]}) is greater than cap_max ({config.strategy.cap_max})."
+            f"Number of initial splats ({init_splat_data.means.shape[0]}) is greater than cap_max ({strat_cap_max})."
         )
 
     # Distribute the GSs to different ranks (also works for single rank)
@@ -227,22 +218,9 @@ class Runner:
 
         # Densification Strategy
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
-
-        if isinstance(
-            self.cfg.strategy,
-            (DefaultWithoutADCStrategy, DefaultWithGaussianCapStrategy),
-        ):
-            self.strategy_state = self.cfg.strategy.initialize_state(
-                scene_scale=self.scene_scale
-            )
-        elif isinstance(self.cfg.strategy, MCMCStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
-        elif isinstance(self.cfg.strategy, IDHFRStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state(
-                scene_scale=self.scene_scale, dataset=self.trainset
-            )
-        else:
-            assert_never(self.cfg.strategy)
+        self.strategy_state = self.cfg.strategy.initialize_state(
+            self.scene_scale, self.trainset
+        )
 
         # Compression Strategy
         self.compression_method = None
@@ -511,11 +489,13 @@ class Runner:
                 colors = colors + background * (1.0 - alphas)
 
             self.cfg.strategy.step_pre_backward(
-                params=self.splats,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=step,
-                info=info,
+                IVDSplatBaseStrategy.StepPreBackwardArgs(
+                    params=self.splats,
+                    optimizers=self.optimizers,
+                    state=self.strategy_state,
+                    step=step,
+                    info=info,
+                )
             )
 
             # loss
@@ -652,43 +632,18 @@ class Runner:
 
                 torch.save(data, f"{save_path}/ckpt_{step}_rank{self.world_rank}.pt")
 
-            if isinstance(
-                self.cfg.strategy,
-                (
-                    DefaultWithoutADCStrategy,
-                    DefaultWithGaussianCapStrategy,
-                ),
-            ):
-                self.cfg.strategy.step_post_backward(
+            self.cfg.strategy.step_post_backward(
+                IVDSplatBaseStrategy.StepPostBackwardArgs(
                     params=self.splats,
                     optimizers=self.optimizers,
                     state=self.strategy_state,
                     step=step,
                     info=info,
                     packed=cfg.packed,
-                )
-            elif isinstance(self.cfg.strategy, IDHFRStrategy):
-                self.cfg.strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    state=self.strategy_state,
-                    step=step,
-                    info=info,
-                    packed=cfg.packed,
-                    image_ids=image_ids,
                     last_rasterization_args=self.last_rasterization_args,
-                )
-            elif isinstance(self.cfg.strategy, MCMCStrategy):
-                self.cfg.strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    state=self.strategy_state,
-                    step=step,
-                    info=info,
                     lr=schedulers[0].get_last_lr()[0],
                 )
-            else:
-                assert_never(self.cfg.strategy)
+            )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:

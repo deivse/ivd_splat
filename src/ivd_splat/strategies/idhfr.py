@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Literal
 import typing
 
 from PIL import ImageFilter
@@ -12,7 +12,6 @@ from PIL.Image import Image as PILImage
 import torch
 import torch.nn.functional as F
 from torchvision.transforms import functional as visionF
-from typing_extensions import Literal
 
 from gsplat.strategy.ops import (
     _update_param_with_optimizer,
@@ -164,6 +163,11 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
     opacity_reduction = 0.6
     num_views_for_edge_score = 10
 
+    def get_cap_max(self):
+        if self.cap_max == -1:
+            return None
+        return self.cap_max
+
     def initialize_state(self, scene_scale: float, dataset: Dataset) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
@@ -225,31 +229,29 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
 
     def step_pre_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
+        args: IVDSplatBaseStrategy.StepPreBackwardArgs,
     ):
         """Callback function to be executed before the `loss.backward()` call."""
         assert (
-            self.key_for_gradient in info
+            self.key_for_gradient in args.info
         ), "The 2D means of the Gaussians is required but missing."
-        info[self.key_for_gradient].retain_grad()
+        args.info[self.key_for_gradient].retain_grad()
 
     def step_post_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        image_ids: torch.Tensor,
-        last_rasterization_args: Dict,
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
-        packed: bool = False,
+        args: IVDSplatBaseStrategy.StepPostBackwardArgs,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
 
+        step, params, optimizers, state, info, last_rasterization_args, packed = (
+            args.step,
+            args.params,
+            args.optimizers,
+            args.state,
+            args.info,
+            args.last_rasterization_args,
+            args.packed,
+        )
         if step >= self.refine_stop_iter:
             return
 

@@ -8,6 +8,7 @@ from typing_extensions import Literal
 
 from gsplat.strategy.ops import duplicate, remove, reset_opa, split
 
+from ivd_splat.datasets.colmap import Dataset
 from ivd_splat.strategies.base import IVDSplatBaseStrategy
 
 
@@ -85,7 +86,7 @@ class DefaultWithGaussianCapStrategy(IVDSplatBaseStrategy):
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
     cap_max: int = -1  # Maximum number of GSs allowed. -1 means no cap.
 
-    def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
+    def initialize_state(self, scene_scale: float, _: Dataset) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
         The returned state should be passed to the `step_pre_backward()` and
@@ -100,6 +101,11 @@ class DefaultWithGaussianCapStrategy(IVDSplatBaseStrategy):
         if self.refine_scale2d_stop_iter > 0:
             state["radii"] = None
         return state
+
+    def get_cap_max(self):
+        if self.cap_max == -1:
+            return None
+        return self.cap_max
 
     def check_sanity(
         self,
@@ -129,28 +135,28 @@ class DefaultWithGaussianCapStrategy(IVDSplatBaseStrategy):
 
     def step_pre_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
+        args: IVDSplatBaseStrategy.StepPreBackwardArgs,
     ):
         """Callback function to be executed before the `loss.backward()` call."""
         assert (
-            self.key_for_gradient in info
+            self.key_for_gradient in args.info
         ), "The 2D means of the Gaussians is required but missing."
-        info[self.key_for_gradient].retain_grad()
+        args.info[self.key_for_gradient].retain_grad()
 
     def step_post_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
-        packed: bool = False,
+        args: IVDSplatBaseStrategy.StepPostBackwardArgs,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+        step, params, optimizers, state, info, packed = (
+            args.step,
+            args.params,
+            args.optimizers,
+            args.state,
+            args.info,
+            args.packed,
+        )
+
         if step >= self.refine_stop_iter:
             return
 

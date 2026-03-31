@@ -26,7 +26,7 @@ POS_NOISE_SCALES="0.01, 0.1"
 # 3DGS MCMC
 # ivd_splat_runner --datasets $GT_DATASETS \
 #     --method ivd-splat \
-#     --init_methods gt_pointcloud \
+#     --init_methods laser_scan \
 #     --output-dir $RESULTS_DIR \
 #     --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES}" \
 #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -36,7 +36,7 @@ POS_NOISE_SCALES="0.01, 0.1"
 # 3DGS MCMC with various init fractions.
 #ivd_splat_runner --datasets $GT_DATASETS \
 #    --method ivd-splat \
-#    --init_methods gt_pointcloud \
+#    --init_methods laser_scan \
 #    --output-dir $RESULTS_DIR \
 #    --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES} dense_init.target_points_fraction={$INIT_FRACTIONS}" \
 #    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -55,7 +55,7 @@ for dataset in $GT_DATASETS; do
     # 3DGS MCMC
     ivd_splat_runner --datasets $dataset \
         --method ivd-splat \
-        --init_methods gt_pointcloud \
+        --init_methods laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -64,7 +64,7 @@ for dataset in $GT_DATASETS; do
     # 3DGS MCMC with various init fractions.
     ivd_splat_runner --datasets $dataset \
         --method ivd-splat \
-        --init_methods gt_pointcloud \
+        --init_methods laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES} dense_init.target_points_fraction={$INIT_FRACTIONS} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -73,7 +73,7 @@ for dataset in $GT_DATASETS; do
     # # 3DGS MCMC with various noise levels and half init size
     ivd_splat_runner --datasets $dataset \
         --method ivd-splat \
-        --init_methods gt_pointcloud \
+        --init_methods laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={MCMCStrategy} dense_init.target_points_fraction={0.5} init.position_noise_std={$POS_NOISE_SCALES} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -82,7 +82,7 @@ for dataset in $GT_DATASETS; do
     # # 3DGS MCMC with various noise levels and full init size.
     # ivd_splat_runner --datasets $dataset \
     #     --method ivd-splat \
-    #     --init_methods gt_pointcloud \
+    #     --init_methods laser_scan \
     #     --output-dir $RESULTS_DIR \
     #     --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES} init.position_noise_std={$POS_NOISE_SCALES} $opacity_reg_config" \
     #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
@@ -91,7 +91,7 @@ for dataset in $GT_DATASETS; do
     # # 3DGS MCMC with various init fractions and noise levels.
     # ivd_splat_runner --datasets $dataset \
     #     --method ivd-splat \
-    #     --init_methods gt_pointcloud \
+    #     --init_methods laser_scan
     #     --output-dir $RESULTS_DIR \
     #     --configs "strategy={MCMCStrategy} dense_init.sampling={$SAMPLING_TYPES} init.position_noise_std={$POS_NOISE_SCALES} dense_init.target_points_fraction={$INIT_FRACTIONS} $opacity_reg_config" \
     #     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \

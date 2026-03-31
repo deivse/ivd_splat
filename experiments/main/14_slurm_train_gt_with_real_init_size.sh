@@ -16,7 +16,7 @@ source "$REPO_PATH/experiments/common_slurm_setup.sh"
 source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 
 #######################################################################
-INIT_METHOD=gt_pointcloud
+INIT_METHOD=laser_scan
 
 # No ADC
 ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
