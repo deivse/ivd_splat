@@ -15,7 +15,6 @@ POINTS_FILE_NAME = "da3_points.ply"
 NB_META_FILE_NAME = "nb-info.json"
 
 
-# TODO: make this shared with the monodepth proxy dataset implementation, this is basically copy-pasted
 def write_proxy_dataset_to_disk(
     original_dataset_str: str,
     dataset: Dataset,
