@@ -40,7 +40,7 @@ It may also accept other arbitrary configuration via CLI. These can then be set 
 
 ### Proxy datasets
 
-The initialization method executable should create a so-called proxy dataset in the directory pointed to by `--output-dir`. When the path to this directory is passed as a dataset to `nerfbaselines`, it should load the original dataset data corresponding to `--scene`, but can modify or extend it (usually by adding the `dense_points3D_path` dataset feature). This is achieved by:
+The initialization method executable should create a so-called proxy dataset in the directory pointed to by `--output-dir`. When the path to this directory is passed as a dataset to `nerfbaselines`, it should load the original dataset data corresponding to `--scene`, but can modify or extend it (usually by replacing the `points3D_xyz` and `points3D_rgb` dataset features). This is achieved by:
 1. storing any produced points/splats in the `--output-dir`, and 
 2. saving a custom `nb-info.json` that includes a reference to the original dataset, and names a custom nerfbaselines loader that will load the original dataset using `nerfbaselines.load_dataset` and modify it as needed.
 

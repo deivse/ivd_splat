@@ -70,5 +70,5 @@ def edgs_proxy_dataset_loader(
         **kwargs,
     )
 
-    dataset["initialization_splat_path"] = str(path / GAUSSIANS_FILE_NAME)
+    dataset["metadata"]["ivd_splat_splat_init_path"] = str(path / GAUSSIANS_FILE_NAME)
     return dataset

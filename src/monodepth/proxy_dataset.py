@@ -45,6 +45,7 @@ def write_proxy_dataset_to_disk(
         "id": id,
         "scene": scene,
         "original_dataset": original_dataset_str,
+        "ivd_splat_dense_init": True,
     }
 
     path.mkdir(parents=True, exist_ok=True)
@@ -76,15 +77,10 @@ def monodepth_proxy_dataset_loader(
         **kwargs,
     )
 
-    if "dense_points3D_path" in features:
-        # If these are requested, loading the points is on the consumer
-        dataset["dense_points3D_path"] = str(path / POINTS_FILE_NAME)
-    else:
-        # Or replace SfM points for compatibility with existing methods
-        pts, rgbs = load_pointcloud_ply(path / POINTS_FILE_NAME)
-        if rgbs is None:
-            raise RuntimeError("Proxy dataset pointcloud does not contain colors.")
-        dataset["points3D_xyz"] = pts
-        dataset["points3D_rgb"] = rgbs
+    pts, rgbs = load_pointcloud_ply(path / POINTS_FILE_NAME)
+    if rgbs is None:
+        raise RuntimeError("Proxy dataset pointcloud does not contain colors.")
+    dataset["points3D_xyz"] = pts
+    dataset["points3D_rgb"] = rgbs
 
     return dataset

@@ -31,70 +31,6 @@ def decompose_rotation_translation_and_uniform_scale(
     return rotation_matrix, translation, scale
 
 
-def rotation_quat_from_normal(normals: torch.Tensor) -> torch.Tensor:
-    """Compute rotation quaternions that align the z-axis with the given normal vectors.
-
-    Args:
-        normals: A tensor of shape (3,) or (N, 3) representing the normal vector(s).
-
-    Returns:
-        A tensor of shape (4,) or (N, 4) representing the rotation quaternion(s).
-    """
-    if normals.ndim == 1:
-        # If input is a single vector (3,), reshape to (1, 3)
-        normals = normals.unsqueeze(0)
-        is_single = True
-    else:
-        is_single = False
-
-    device = normals.device
-    N = normals.shape[0]
-
-    z_axis = torch.tensor([0.0, 0.0, 1.0], device=device).expand(N, 3)
-    normals = normals / torch.norm(normals, dim=1, keepdim=True)
-
-    # Dot product between z_axis and normals: (N,)
-    cos_theta = (z_axis * normals).sum(dim=1)
-
-    # Initialize quaternion tensor (w, x, y, z)
-    quats = torch.zeros((N, 4), device=device)
-
-    # Case 1: No rotation needed (cos_theta close to 1)
-    mask_identity = torch.isclose(cos_theta, torch.tensor(1.0, device=device))
-    quats[mask_identity] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
-
-    # Case 2: 180 degree rotation (cos_theta close to -1)
-    # We rotate 180 degrees around the x-axis or y-axis (any axis perpendicular to z)
-    mask_flip = torch.isclose(cos_theta, torch.tensor(-1.0, device=device))
-    # Standard flip: 180 deg around X-axis -> q = [0, 1, 0, 0]
-    quats[mask_flip] = torch.tensor([0.0, 1.0, 0.0, 0.0], device=device)
-
-    # Case 3: Standard case
-    mask_standard = ~(mask_identity | mask_flip)
-
-    if mask_standard.any():
-        # normals_standard shape: (M, 3), where M is number of standard cases
-        normals_standard = normals[mask_standard]
-        z_axis_standard = z_axis[mask_standard]
-        cos_theta_standard = cos_theta[mask_standard]
-
-        rotation_axis = torch.cross(z_axis_standard, normals_standard, dim=1)
-        rotation_axis = rotation_axis / torch.norm(rotation_axis, dim=1, keepdim=True)
-        angle = torch.acos(cos_theta_standard)
-
-        half_angle = angle / 2.0
-        sin_half_angle = torch.sin(half_angle)
-
-        quats[mask_standard, 0] = torch.cos(half_angle)  # qw
-        quats[mask_standard, 1:] = rotation_axis * sin_half_angle.unsqueeze(
-            1
-        )  # qx, qy, qz
-
-    if is_single:
-        return quats.squeeze(0)
-    return quats
-
-
 def default_init_shN(
     num_splats: int, sh_degree: int, device: torch.device
 ) -> torch.Tensor:
@@ -134,64 +70,49 @@ class InitResult(typing.NamedTuple):
         )
 
 
-def init_load_pts_and_rgbs(
-    config: Config, parser: Parser | NerfbaselinesParser
+def get_point_data_from_parser(
+    config: Config,
+    parser: Parser | NerfbaselinesParser,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if config.init_type == "sparse":
-        _LOGGER.info("using sparse points from parser")
-        if parser.points_rgb is None:
-            raise RuntimeError("Parser does not provide point colors for sparse init.")
-        return (
-            torch.from_numpy(parser.points).float(),
-            torch.from_numpy(parser.points_rgb / 255.0).float(),
+    if config.init_type not in ("sparse", "dense"):
+        raise ValueError(
+            f"Unsupported init_type {config.init_type} for get_point_data_from_parser."
         )
 
-    if config.init_type != "dense":
+    _LOGGER.info("using %s points from parser", config.init_type)
+    if parser.points_rgb is None:
+        raise RuntimeError("Parser does not provide point colors for initialization.")
+
+    if config.init_type == "dense":
+        if not isinstance(parser, NerfbaselinesParser):
+            _LOGGER.warning(
+                "Dense initialization expects a NerfbaselinesParser. Initialization will proceed, but double check that everything is correct. Number of points: %d.",
+                parser.points.shape[0],
+            )
+        elif not parser.nerfbaselines_dataset["metadata"].get(
+            "ivd_splat_dense_init", False
+        ):
+            _LOGGER.warning(
+                "Nerfbaselines dataset does not indicate that the initialization data is dense. Initialization will proceed, but double check that everything is correct. Number of points: %d.",
+                (
+                    parser.points.shape[0]
+                    if parser.points is not None
+                    else "<Error: parser.points is None>"
+                ),
+            )
+    elif (
+        config.init_type == "sparse"
+        and isinstance(parser, NerfbaselinesParser)
+        and parser.nerfbaselines_dataset["metadata"].get("ivd_splat_dense_init", False)
+    ):
         raise RuntimeError(
-            f"Unsupported init_type {config.init_type} for load_pts_and_rgbs"
+            "Parser indicates that the initialization data is dense, but config.init_type is set to sparse. Please check your configuration and dataset."
         )
 
-    # Dealing with "dense" init_type from here
-    if not isinstance(parser, NerfbaselinesParser):
-        raise RuntimeError(
-            "Dense initialization currently requires NerfbaselinesParser."
-        )
-
-    _LOGGER.info("using dense points from nerfbaselines dataset")
-    points, rgbs = load_pointcloud_ply(
-        parser.nerfbaselines_dataset["dense_points3D_path"]
+    return (
+        torch.from_numpy(parser.points).float(),
+        torch.from_numpy(parser.points_rgb / 255.0).float(),
     )
-    if rgbs is None:
-        raise RuntimeError("Dense pointcloud does not contain colors.")
-
-    points = transform_points(parser.transform, points)
-
-    return (torch.from_numpy(points).float(), torch.from_numpy(rgbs).float())
-
-
-def init_load_normals(
-    config: Config, parser: Parser | NerfbaselinesParser
-) -> torch.Tensor:
-
-    path = None
-    if config.init.use_normals is not None:
-        _LOGGER.info("using normals from --init-normals-path")
-        path = config.init.normals_path
-
-    if isinstance(parser, NerfbaselinesParser) and path is None:
-        _LOGGER.info("using normals from nerfbaselines dataset")
-        path = parser.nerfbaselines_dataset.get("dense_points3D_normals_path", None)
-
-    if path is None:
-        raise RuntimeError(
-            "Init with normals requires --init-normals-path or Nerfbaselines parser that provides normals."
-        )
-
-    _LOGGER.info(f"loading normals from {path}")
-    normals = load_normals(path)
-    normals = transform_normals(parser.transform, normals)
-
-    return torch.from_numpy(normals).float()
 
 
 def _pick_dense_init_points(
@@ -306,13 +227,15 @@ def _add_noise_to_init_points(
     return points, rgbs
 
 
-def init_without_normals(
+def point_cloud_init(
     points: torch.Tensor, rgbs: torch.Tensor, config: Config, scene_scale: float
 ) -> SplatData:
     """
-    Regular initialization without normals.
+    Create splats from point cloud as in base 3DGS.
     """
-    _LOGGER.info("initializing gaussians without using normals")
+    _LOGGER.info(
+        "initializing gaussians from point cloud with %d points", points.shape[0]
+    )
 
     if points.shape[0] != rgbs.shape[0]:
         raise RuntimeError("Number of points and rgbs must be identical.")
@@ -344,71 +267,20 @@ def init_without_normals(
     ).to_splat_data(config)
 
 
-def init_with_normals(
-    points: torch.Tensor,
-    rgbs: torch.Tensor,
-    normals: torch.Tensor,
-    config: Config,
-    scene_scale: float,
-):
-    """
-    Initialize gaussians using point normals.
-    """
-
-    _LOGGER.info(
-        f"initializing gaussians with normals, small axis scale: {config.init.normal_init_small_axis_scale}"
-    )
-
-    if points.shape[0] != normals.shape[0]:
-        raise RuntimeError("Number of points and normals must be identical.")
-
-    if points.shape[0] != rgbs.shape[0]:
-        raise RuntimeError("Number of points and rgbs must be identical.")
-
-    if config.init_type == "dense":
-        point_indices = _pick_dense_init_points(points, rgbs, config)
-        points = points[point_indices]
-        rgbs = rgbs[point_indices]
-        normals = normals[point_indices]
-
-    points, rgbs = _add_noise_to_init_points(points, rgbs, config, scene_scale)
-
-    if config.init.remove_floaters:
-        mask = _get_floater_mask(points, config)
-        points = points[mask]
-        rgbs = rgbs[mask]
-        normals = normals[mask]
-
-    dist2_avg = (knn(points, 4)[0] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    if config.init.clamp_scales:
-        scales = torch.clamp(scales, max=scene_scale / 100)
-
-    scales[:, 0] = scales[:, 0] * config.init.normal_init_small_axis_scale
-    scales = torch.log(scales)
-
-    quats = rotation_quat_from_normal(normals)  # [N, 4]
-
-    return InitResult(
-        points=points, rgbs=rgbs, scales=scales, quats=quats
-    ).to_splat_data(config)
-
 def _get_splat_subset_inplace(splat: SplatData, config: Config) -> None:
     if config.dense_init.target_num_points is None:
         _LOGGER.info(
             "Using all pre-made splat points for initialization since target_num_points is None."
         )
         return
-            
+
     target_num_pts = config.dense_init.target_num_points
-    
+
     if config.dense_init.target_points_fraction is not None:
         _LOGGER.info(
             f"Selecting {config.dense_init.target_points_fraction} * {target_num_pts} splats for dense initialization."
         )
         target_num_pts = int(target_num_pts * config.dense_init.target_points_fraction)
-
 
     num_points = splat.means.shape[0]
     if target_num_pts >= num_points:
@@ -423,13 +295,13 @@ def _get_splat_subset_inplace(splat: SplatData, config: Config) -> None:
 
     splat.select_random_subset_inplace(target_num_pts)
 
-    splat_fraction = target_num_pts / num_points    
+    splat_fraction = target_num_pts / num_points
     if config.splat_init.increase_scale_with_fewer_splats:
         _LOGGER.info(
             f"increasing scale of pre-made splats by {1/splat_fraction} to compensate for fewer splats."
         )
         splat.scales = np.log(np.exp(splat.scales) * (1 / splat_fraction))
-    
+
 
 def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> SplatData:
     if not isinstance(parser, NerfbaselinesParser):
@@ -437,13 +309,15 @@ def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> Spla
             "Init with pre-made splat currently requires NerfbaselinesParser."
         )
 
-    if "initialization_splat_path" not in parser.nerfbaselines_dataset:
+    nb_metadata = parser.nerfbaselines_dataset["metadata"]
+    if "ivd_splat_splat_init_path" not in nb_metadata:
         raise RuntimeError(
             "Nerfbaselines dataset does not contain initialization splat path."
         )
 
-    splat_path = parser.nerfbaselines_dataset["initialization_splat_path"]
+    splat_path = nb_metadata["ivd_splat_splat_init_path"]
     splat = load_splat_ply(splat_path)
+    # Also increases scales if config.splat_init.increase_scale_with_fewer_splats is True
     _get_splat_subset_inplace(splat, config)
 
     rotation, _, scale = decompose_rotation_translation_and_uniform_scale(
@@ -455,8 +329,12 @@ def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> Spla
     # TODO: this is only fine as long as the init method outputs isotropic covariances.
     # If we want to support anisotropic covariances we need to apply rotation too
     # splat.quats = rotate_quaternions(splat.quats, rotation)
-    scales_are_isotropic = torch.allclose(splat.scales[:, 0], splat.scales[:, 1]) and torch.allclose(splat.scales[:, 1], splat.scales[:, 2])
+    scales_are_isotropic = torch.allclose(
+        splat.scales[:, 0], splat.scales[:, 1]
+    ) and torch.allclose(splat.scales[:, 1], splat.scales[:, 2])
     if not scales_are_isotropic:
-        raise NotImplementedError("Applying rotations to pre-made splats not implemented")
+        raise NotImplementedError(
+            "Transforming initial splats with anisotropic scales is not implemented!"
+        )
 
     return splat

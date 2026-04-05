@@ -26,7 +26,7 @@ dependencies = [
   "scipy>=1.16.3",
   "opencv-python>=4.11.0.86",
   "tyro>=0.9.35",
-  "nerfbaselines @ git+https://github.com/deivse/nerfbaselines.git", # IF CHANGING CHANGE IN EVAL_SCRIPTS TOO
+  "nerfbaselines @ git+https://github.com/deivse/nerfbaselines.git", # ONCE IN UPSTREAM AND RELEASED, CHANGE IN EVAL_SCRIPTS TOO
   "mmengine>=0.10.7",
   "scikit-image>=0.25.2",
   "eval_scripts",

@@ -592,9 +592,6 @@ class IVDSplat(Method):
                     "points3D_normals",
                     "color",
                     "images_points3D_indices",
-                    "dense_points3D_path",
-                    "dense_points3D_normals_path",
-                    "trained_splat_path",
                 )
             ),
             supported_camera_models=frozenset(("pinhole",)),
