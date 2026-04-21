@@ -3,11 +3,11 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=7-00:00:00
-#SBATCH --partition=amdextralong
+#SBATCH --partition=cpuextralong
 #SBATCH --output=/home/desiaiva/logs/mlflow_server.log
 
 # Can't use script_dir here because location changes when running via slurm
-REPO_PATH="$HOME/monocular_depth_tsdf_fusion"
+REPO_PATH="$HOME/ivd_splat"
 
 export SLURM_MLFLOW_IS_SERVER_NODE=1
 source "$REPO_PATH/experiments/common_slurm_setup.sh"

@@ -17,7 +17,7 @@ ml Anaconda3
 conda activate main
 
 # Repo path can be set in parent script or environment
-export REPO_PATH="${REPO_PATH:-$HOME/monocular_depth_tsdf_fusion}"
+export REPO_PATH="${REPO_PATH:-$HOME/ivd_splat}"
 
 SCANNETPP_LOADER_DIR=$(python -c "import scannetpp_nerfbaselines_loader; import os; print(os.path.dirname(scannetpp_nerfbaselines_loader.__file__))")
 ETH3D_LOADER_DIR=$(python -c "import eth3d_nerfbaselines_loader; import os; print(os.path.dirname(eth3d_nerfbaselines_loader.__file__))")

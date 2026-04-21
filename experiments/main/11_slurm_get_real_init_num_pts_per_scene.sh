@@ -10,7 +10,7 @@
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
 
 # Can't use script_dir here because location changes when running via slurm
-REPO_PATH="$HOME/monocular_depth_tsdf_fusion"
+REPO_PATH="$HOME/ivd_splat"
 source "$REPO_PATH/experiments/common_slurm_setup.sh"
 source "$REPO_PATH/experiments/gt_pointclouds/common_vars.sh"
 
