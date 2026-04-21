@@ -29,7 +29,7 @@ def get_dataset_scenes(dataset_id: str, exclude_list) -> list[str] | list[Path]:
             ]
         if os.environ.get("SCANNETPP_PATH", None) is None:
             _LOGGER.warning(
-                "SCANNETPP_PATH environment variable not set. Skipping scannet++ scenes."
+                "SCANNETPP_PATH environment variable not set. dataset_scenes.SCENES_PER_DATASET will not contain scannet++ scenes."
             )
             return []
         return [
@@ -47,7 +47,7 @@ def get_dataset_scenes(dataset_id: str, exclude_list) -> list[str] | list[Path]:
             ]
         if os.environ.get("ETH3D_PATH", None) is None:
             _LOGGER.warning(
-                "ETH3D_PATH environment variable not set. Skipping eth3d scenes."
+                "ETH3D_PATH environment variable not set. dataset_scenes.SCENES_PER_DATASET will not contain eth3d scenes."
             )
             return []
         return [
