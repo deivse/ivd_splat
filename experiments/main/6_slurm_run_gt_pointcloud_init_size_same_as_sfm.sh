@@ -23,7 +23,6 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "strategy={DefaultWithGaussianCapStrategy} strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
-    --extra_tags "init_size_same_as_sfm=true"
 
 # IDHFR
 ivd_splat_runner --datasets $GT_DATASETS \
@@ -33,7 +32,6 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "strategy={IDHFRStrategy}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
-    --extra_tags "init_size_same_as_sfm=true"
 
 for dataset in $GT_DATASETS; do
     # If contains scannet++, use custom opacity reg for MCMC since default is too high and causes all points to be removed.
@@ -51,5 +49,4 @@ for dataset in $GT_DATASETS; do
         --configs "strategy={MCMCStrategy} $opacity_reg_config" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
         --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
-        --extra_tags "init_size_same_as_sfm=true"
 done

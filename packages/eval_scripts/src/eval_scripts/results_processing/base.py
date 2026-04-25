@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-import datetime
-import itertools
 import typing
 from eval_scripts.ivd_splat_runner import MAX_STEPS
 import mlflow
@@ -24,18 +22,55 @@ METRIC_PRETTY_NAMES = {
 }
 PER_SCENE_VARYING_PARAMS = {"scene", "dense_init.target_num_points", "strategy.cap_max"}
 
+
+def boolean_conversion(default: bool = False) -> typing.Callable[[typing.Any], bool]:
+    def converter(x: typing.Any) -> bool:
+        if x is None:
+            return default
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, str):
+            if x.lower() in {"true", "1", "yes"}:
+                return True
+            elif x.lower() in {"false", "0", "no"}:
+                return False
+        raise ValueError(f"Cannot convert value '{x}' to boolean.")
+
+    return converter
+
+
+T = typing.TypeVar("T")
+
+
+def defaulter(
+    default: typing.Optional[T] = None,
+) -> typing.Callable[[typing.Any], typing.Optional[T]]:
+    def converter(x: typing.Optional[T]) -> typing.Optional[T]:
+        if x is None:
+            return default
+        return x
+
+    return converter
+
+
+def converter(conversion_func, default=None) -> typing.Callable[[typing.Any], str]:
+    def converter(x: typing.Any) -> str:
+        if x is None:
+            return default
+        return conversion_func(x)
+
+    return converter
+
+
 CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
     "train/num-gaussians": int,
-    "train/total-train-time": lambda x: float(x) / 60 if x is not None else None,
-    "gaussian_cap_fraction": lambda x: str(x) if x is not None else str(1.0),
-    "init_size_same_as_sfm": lambda x: x == "true" if x is not None else False,
-    "splat_init.increase_scale_with_fewer_splats": lambda x: (
-        x.lower() == "true" if x is not None else False
-    ),
-    "splat_init.target_splat_fraction": lambda x: x if x is not None else str(1.0),
-    "dense_init.target_points_fraction": lambda x: x if x is not None else str(1.0),
-    "means_lr_init": lambda x: x if x is not None else "0.00016",
-    "means_lr_final": lambda x: x if x is not None else "1.6000000000000001e-06",
+    "train/total-train-time": converter(lambda x: float(x) / 60),
+    "gaussian_cap_fraction": converter(str, default="1.0"),
+    "splat_init.increase_scale_with_fewer_splats": boolean_conversion(default=True),
+    "splat_init.target_splat_fraction": defaulter(default="1.0"),
+    "dense_init.target_points_fraction": defaulter(default="1.0"),
+    "means_lr_init": defaulter("0.00016"),
+    "means_lr_final": defaulter("1.6000000000000001e-06"),
 }
 
 
@@ -241,13 +276,50 @@ def drop_scenes_not_present_in_all(
     return (common_scenes, dropped_scenes)
 
 
+def _build_runs_query(
+    input_query: str | None, finished_only: bool, finished_query: str
+) -> str:
+    query = input_query or ""
+    if finished_only:
+        if query != "":
+            query += " and "
+        query += finished_query
+    return query
+
+
+def _get_full_runs_list(
+    client: MlflowClient, experiment: mlflow.entities.Experiment, query: str | None
+) -> list[mlflow.entities.Run]:
+    runs: list[mlflow.entities.Run] = []
+    while True:
+        paged_list = client.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=(query or ""),
+            max_results=np.iinfo(np.int16).max,
+        )
+        runs.extend(paged_list)
+        if not paged_list.token:
+            break
+        logging.info(
+            f"Fetched {len(runs)} runs so far, fetching more with token {paged_list.token}..."
+        )
+        paged_list = client.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=(query or ""),
+            max_results=np.iinfo(np.int16).max,
+            page_token=paged_list.token,
+        )
+        if not paged_list:
+            break
+    return runs
+
+
 def load_runs(
     query: str | None = None,
     experiment_name: str = "gt_pointclouds",
     tracking_uri: str = "http://localhost:6069",
     finished_run_step: int = MAX_STEPS,
     finished_only: bool = True,
-    created_after: datetime.datetime | None = None,
 ) -> RunsInfo:
     mlflow.set_tracking_uri(tracking_uri)
 
@@ -262,38 +334,23 @@ def load_runs(
             f"Experiment '{experiment_name}' not found with tracking URI '{tracking_uri}'"
         )
 
-    runs: list[mlflow.entities.Run] = list(
-        client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=(query or ""),
-            max_results=np.iinfo(np.int16).max,
-        )
+    query = _build_runs_query(
+        query,
+        finished_only,
+        f"metrics.final_step = {finished_run_step} and attributes.status = 'FINISHED'",
     )
+    runs = _get_full_runs_list(client, experiment, query)
 
-    finished_runs = [
-        run
-        for run in runs
-        if run.info.status == "FINISHED"
-        and run.data.metrics["final_step"] == finished_run_step
-        and (
-            created_after is None
-            or datetime.datetime.fromtimestamp(run.info.start_time / 1000)
-            > created_after
-        )
-    ]
-
-    if finished_only:
-        logging.info(f"Loading only finished runs ({len(finished_runs)}/{len(runs)})")
-        runs = finished_runs
-    else:
-        logging.info(f"Loading all runs ({len(runs)})")
-
-    param_names = {k for run in finished_runs for k in run.data.params.keys()}
-    metric_names = {k for run in finished_runs for k in run.data.metrics.keys()}
+    param_names = {k for run in runs for k in run.data.params.keys()}
+    metric_names = {k for run in runs for k in run.data.metrics.keys()}
 
     runs_dataframe = pd.DataFrame(
         [
-            dict(**run.data.params, **run.data.metrics, run_id=run.info.run_id)
+            dict(
+                **run.data.params,
+                **run.data.metrics,
+                run_id=run.info.run_id,
+            )
             for run in runs
         ]
     )
@@ -333,7 +390,6 @@ def load_init_method_runs(
     query: str | None = None,
     tracking_uri: str = "http://localhost:6069",
     finished_only: bool = True,
-    created_after: datetime.datetime | None = None,
 ) -> RunsInfo:
     mlflow.set_tracking_uri(tracking_uri)
 
@@ -348,33 +404,15 @@ def load_init_method_runs(
             f"Experiment '{experiment_name}' not found with tracking URI '{tracking_uri}'"
         )
 
-    runs: list[mlflow.entities.Run] = list(
-        client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=(query or ""),
-            max_results=np.iinfo(np.int16).max,
-        )
+    query = _build_runs_query(
+        query,
+        finished_only,
+        "attributes.status = 'FINISHED'",
     )
+    runs = _get_full_runs_list(client, experiment, query)
 
-    finished_runs = [
-        run
-        for run in runs
-        if run.info.status == "FINISHED"
-        and (
-            created_after is None
-            or datetime.datetime.fromtimestamp(run.info.start_time / 1000)
-            > created_after
-        )
-    ]
-
-    if finished_only:
-        logging.info(f"Loading only finished runs ({len(finished_runs)}/{len(runs)})")
-        runs = finished_runs
-    else:
-        logging.info(f"Loading all runs ({len(runs)})")
-
-    param_names = {k for run in finished_runs for k in run.data.params.keys()}
-    metric_names = {k for run in finished_runs for k in run.data.metrics.keys()}
+    param_names = {k for run in runs for k in run.data.params.keys()}
+    metric_names = {k for run in runs for k in run.data.metrics.keys()}
 
     runs_dataframe = pd.DataFrame(
         [

@@ -11,3 +11,5 @@ results_backup/
 random_leftover_stuff/
 mlruns/
 tmp/
+results_scripts/graphs/
+personal/
