@@ -48,7 +48,8 @@ If an executable (`ivd_splat` or an init method) accepts `--parameter-name` on i
 - `packages/` - first-party code that is structured as separate python projects with their own pyproject.toml files    
     - `eval_scripts` includes orchestrator scripts to easily invoke initialization and training on any datasets/scenes with mlflow logging integration (`ivd_splat_runner`, `init_runner`), as well some results processing utilities.
     - `native_modules` is the catch all for any native code used by the implementation, but currently only contains a C++ LO-RANSAC implementation used in `src/monodepth`.
-- `experiments` - SLURM job scheduler scripts used to run all experiments reported in the paper. See [experiments/README.md](experiments/README.md) for details.
+- `experiments/` - SLURM job scheduler scripts used to run all experiments reported in the paper. See [experiments/README.md](experiments/README.md) for details.
+- `results_scripts/` - contains ipynb used to produce all results in the paper (obtains data from mlflow) and related files.
 - `submodules/` - git submodules
 - `third-party/` - third-party code that could not be included as git submodules 
     - `diff-gaussian-rasterization-idhfr` - modified version of diff-gaussian-rasterization used by official IDHFR implementation (https://github.com/XiaoBin2001/Improved-GS/ - `submodules.zip`)
