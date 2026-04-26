@@ -43,7 +43,7 @@ This repository contains most of the code required to replicate the results in t
 ### Related repositories
 - ScanNet++ dataset integration - https://github.com/deivse/ivd_splat_scannetpp_integration
 - ETH3D dataset integration - https://github.com/deivse/ivd_splat_eth3d_integration
-- NerfBaselines fork used in this repository, which supports additional fields for datasets - https://github.com/deivse/nerfbaselines (we plan to integrate a feature into `nerfbaselines` upstreamd that will allow to drop this fork).
+- NerfBaselines fork used in this repository - https://github.com/deivse/nerfbaselines (the only important change is a small CLI argument parsing bugfix, should not require using the fork in the future).
 
 # License 
 Note: This is really messy, but this is the only way I was able to abide by the licensing terms of all third-party code (to the best of my knowledge) while keeping the main license as open as possible.
