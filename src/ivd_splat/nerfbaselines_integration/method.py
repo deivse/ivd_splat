@@ -327,8 +327,8 @@ schedulers=self.schedulers
     )
     iter_step_body.extend(init_train_body[:4])
     iter_step_body.extend((runner_train_ast.body[-1].body)[1:])
-    iter_step_body.pop(-8)  # Remove write to tensorboard step
-    save_step = iter_step_body.pop(-7)  # Remove save() step
+    iter_step_body.pop(-9)  # Remove write to tensorboard step
+    save_step = iter_step_body.pop(-8)  # Remove save() step
     iter_step_body.pop(-2)  # Remove eval() step
     # Remove pbar.set_description
     iter_step_body.pop(
