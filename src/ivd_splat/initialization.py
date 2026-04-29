@@ -45,6 +45,17 @@ def default_init_opacities(
     return torch.logit(torch.full((num_splats,), config.init.opacity, device=device))
 
 
+def default_init_scales(
+    means: torch.Tensor, scene_scale: float, config: Config
+) -> torch.Tensor:
+    dist_avg = (knn(means, 3)[0]).mean(dim=-1)  # [N,]
+    scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+    if config.init.clamp_scales:
+        scales = torch.clamp(scales, max=scene_scale / 100)
+    scales = torch.log(scales)
+    return scales
+
+
 class InitResult(typing.NamedTuple):
     points: torch.Tensor
     rgbs: torch.Tensor
@@ -197,7 +208,7 @@ def _pick_dense_init_points(
 
 def _get_floater_mask(points: torch.Tensor, config: Config) -> torch.Tensor:
     _LOGGER.info("Removing floaters from point cloud.")
-    dist2_avg = (knn(points, 4)[0] ** 2).mean(dim=-1)  # [N,]
+    dist2_avg = (knn(points, 3)[0] ** 2).mean(dim=-1)  # [N,]
 
     threshold = torch.quantile(dist2_avg, config.init.floater_knn_distance_percentile)
     mask = dist2_avg <= threshold
@@ -254,12 +265,7 @@ def point_cloud_init(
 
     N = points.shape[0]
 
-    dist2_avg = (knn(points, 4)[0] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    if config.init.clamp_scales:
-        scales = torch.clamp(scales, max=scene_scale / 100)
-    scales = torch.log(scales)
+    scales = default_init_scales(points, scene_scale, config)  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
 
     return InitResult(
