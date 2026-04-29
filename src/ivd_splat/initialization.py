@@ -100,6 +100,16 @@ def get_point_data_from_parser(
                 "Dense initialization expects a NerfbaselinesParser. Initialization will proceed, but double check that everything is correct. Number of points: %d.",
                 parser.points.shape[0],
             )
+        elif "dense_points3D_path" in parser.nerfbaselines_dataset["metadata"]:
+            dense_points_path = parser.nerfbaselines_dataset["metadata"][
+                "dense_points3D_path"
+            ]
+            _LOGGER.info(
+                "Loading dense initialization points from path specified in Nerfbaselines dataset metadata: %s",
+                dense_points_path,
+            )
+            points, rgbs = load_pointcloud_ply(dense_points_path)
+            return torch.from_numpy(points).float(), torch.from_numpy(rgbs).float()
         elif not parser.nerfbaselines_dataset["metadata"].get(
             "ivd_splat_dense_init", False
         ):
