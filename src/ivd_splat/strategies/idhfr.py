@@ -358,6 +358,10 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
+        assert (
+            state["grad2d"].shape[0] == n_gaussian
+        ), "State grad2d has incorrect shape."
+
         # update the running state
         if packed:
             # grads is [nnz, 2]
