@@ -5,11 +5,11 @@ import numpy as np
 import torch
 from ivd_splat.config import Config
 from ivd_splat.datasets.colmap import Parser
-from ivd_splat.datasets.normalize import transform_normals, transform_points
+from ivd_splat.datasets.normalize import transform_points
 from ivd_splat.nerfbaselines_integration.parser import NerfbaselinesParser
 from ivd_splat.utils.runner_utils import knn, rgb_to_sh
 
-from shared.point_cloud_io import load_pointcloud_ply, load_normals
+from shared.point_cloud_io import load_pointcloud_ply
 from shared.splat_ply_io import SplatData, load_splat_ply
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,6 +109,7 @@ def get_point_data_from_parser(
                 dense_points_path,
             )
             points, rgbs = load_pointcloud_ply(dense_points_path)
+            points = transform_points(parser.transform, points)
             return torch.from_numpy(points).float(), torch.from_numpy(rgbs).float()
         elif not parser.nerfbaselines_dataset["metadata"].get(
             "ivd_splat_dense_init", False
