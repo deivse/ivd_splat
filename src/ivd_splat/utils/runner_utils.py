@@ -139,9 +139,9 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     return torch.stack((b1, b2, b3), dim=-2)
 
 
-def knn(x: Tensor, K: int = 4) -> tuple[Tensor, Tensor]:
+def knn(x: Tensor, K: int = 3) -> tuple[Tensor, Tensor]:
     x_np = x.cpu().numpy()
-    model = NearestNeighbors(n_neighbors=K, metric="euclidean", n_jobs=-1).fit(x_np)
+    model = NearestNeighbors(n_neighbors=K + 1, metric="euclidean", n_jobs=-1).fit(x_np)
     distances, indices = model.kneighbors(x_np)
     return torch.from_numpy(distances[:, 1:]).to(x), torch.from_numpy(
         indices[:, 1:]

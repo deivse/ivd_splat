@@ -25,7 +25,20 @@ class DenseInitConfig(SerializableConfig):
     # Adaptive - sample each point with probability proportional to color differences with it's K nearest neighbors
     sampling: Literal["uniform", "adaptive"] = "uniform"
 
-    knn_num_neighbors: int = 4  # for adaptive sampling
+    knn_num_neighbors: int = 3  # for adaptive sampling
+
+
+@dataclass
+class NanoGSConfig(SerializableConfig):
+    # Merge Gs with edge cost below this value
+    cost_threshold: float = 1.3
+    # Number of merge iterations to perform
+    iterations: int = 3
+
+    # Before main merging loop, prune splats with opacity below min(preprune_opacity_threshold, all_opacities.median()).
+    preprune_opacity_threshold: float = 0.1
+    # Number of nearest neighbors to consider when building merge graph.
+    knn_k: int = 16
 
 
 @dataclass
@@ -164,6 +177,12 @@ class Config(SerializableConfig):
 
     # Use random background for training to discourage transparency
     random_background: bool = False
+
+    # If set to a positive number, will run NanoGS simplification after n steps of training.
+    # Warning: Best to avoid doing this after densification begins with the current implementation (see TODOs.)
+    nanogs_simplify_iter: int = -1
+    # Configuration for NanoGS simplification.
+    nanogs_config: Optional[NanoGSConfig] = field(default_factory=NanoGSConfig)
 
     # Opacity regularization
     opacity_reg: float = 0.0

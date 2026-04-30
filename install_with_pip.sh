@@ -9,7 +9,8 @@ git submodule update --init --recursive
 pip install -e .                         \
             -e packages/eval_scripts/    \
             -v packages/native_modules/  \
-            submodules/RoMa 
+            submodules/RoMa \
+            git+https://github.com/deivse/NanoGS.git # Using fork for now, can switch to main if PR is merged.
 
 pip install --no-build-isolation "fused_ssim @ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5" \
             --no-build-isolation third-party/diff-gaussian-rasterization-idhfr/

@@ -41,6 +41,9 @@ from ivd_splat.lib_bilagrid import (
     slice,
     total_variation_loss,
 )
+from ivd_splat.nanogs_simplification import (
+    nanogs_simplify,
+)
 from ivd_splat.strategies import IVDSplatBaseStrategy
 from ivd_splat.utils.runner_utils import (
     AppearanceOptModule,
@@ -49,7 +52,6 @@ from ivd_splat.utils.runner_utils import (
 )
 from ivd_splat.utils.cuda_memory import cuda_stats_msg, CudaMemStats
 from shared.serializable_config import mlflow_log_config_params
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -550,15 +552,6 @@ class Runner:
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
 
-            # write images (gt and render)
-            # if world_rank == 0 and step % 800 == 0:
-            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
-            #     imageio.imwrite(
-            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
-            #         (canvas * 255).astype(np.uint8),
-            #     )
-
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
@@ -635,6 +628,14 @@ class Runner:
                     lr=schedulers[0].get_last_lr()[0],
                 )
             )
+
+            if step == self.cfg.nanogs_simplify_iter:
+                nanogs_simplify(
+                    self.splats,
+                    self.optimizers,
+                    self.strategy_state,
+                    self.cfg.nanogs_config,
+                )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:

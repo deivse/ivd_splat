@@ -82,6 +82,6 @@ def da3_proxy_dataset_loader(
     if rgbs is None:
         raise RuntimeError("Proxy dataset pointcloud does not contain colors.")
     dataset["points3D_xyz"] = pts
-    dataset["points3D_rgb"] = rgbs
+    dataset["points3D_rgb"] = rgbs * 255.0
 
     return dataset

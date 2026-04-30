@@ -5,11 +5,11 @@ import numpy as np
 import torch
 from ivd_splat.config import Config
 from ivd_splat.datasets.colmap import Parser
-from ivd_splat.datasets.normalize import transform_normals, transform_points
+from ivd_splat.datasets.normalize import transform_points
 from ivd_splat.nerfbaselines_integration.parser import NerfbaselinesParser
 from ivd_splat.utils.runner_utils import knn, rgb_to_sh
 
-from shared.point_cloud_io import load_pointcloud_ply, load_normals
+from shared.point_cloud_io import load_pointcloud_ply
 from shared.splat_ply_io import SplatData, load_splat_ply
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +43,17 @@ def default_init_opacities(
     num_splats: int, device: torch.device, config: Config
 ) -> torch.Tensor:
     return torch.logit(torch.full((num_splats,), config.init.opacity, device=device))
+
+
+def default_init_scales(
+    means: torch.Tensor, scene_scale: float, config: Config
+) -> torch.Tensor:
+    dist_avg = (knn(means, 3)[0]).mean(dim=-1)  # [N,]
+    scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+    if config.init.clamp_scales:
+        scales = torch.clamp(scales, max=scene_scale / 100)
+    scales = torch.log(scales)
+    return scales
 
 
 class InitResult(typing.NamedTuple):
@@ -89,6 +100,17 @@ def get_point_data_from_parser(
                 "Dense initialization expects a NerfbaselinesParser. Initialization will proceed, but double check that everything is correct. Number of points: %d.",
                 parser.points.shape[0],
             )
+        elif "dense_points3D_path" in parser.nerfbaselines_dataset["metadata"]:
+            dense_points_path = parser.nerfbaselines_dataset["metadata"][
+                "dense_points3D_path"
+            ]
+            _LOGGER.info(
+                "Loading dense initialization points from path specified in Nerfbaselines dataset metadata: %s",
+                dense_points_path,
+            )
+            points, rgbs = load_pointcloud_ply(dense_points_path)
+            points = transform_points(parser.transform, points)
+            return torch.from_numpy(points).float(), torch.from_numpy(rgbs).float()
         elif not parser.nerfbaselines_dataset["metadata"].get(
             "ivd_splat_dense_init", False
         ):
@@ -197,7 +219,7 @@ def _pick_dense_init_points(
 
 def _get_floater_mask(points: torch.Tensor, config: Config) -> torch.Tensor:
     _LOGGER.info("Removing floaters from point cloud.")
-    dist2_avg = (knn(points, 4)[0] ** 2).mean(dim=-1)  # [N,]
+    dist2_avg = (knn(points, 3)[0] ** 2).mean(dim=-1)  # [N,]
 
     threshold = torch.quantile(dist2_avg, config.init.floater_knn_distance_percentile)
     mask = dist2_avg <= threshold
@@ -254,12 +276,7 @@ def point_cloud_init(
 
     N = points.shape[0]
 
-    dist2_avg = (knn(points, 4)[0] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    if config.init.clamp_scales:
-        scales = torch.clamp(scales, max=scene_scale / 100)
-    scales = torch.log(scales)
+    scales = default_init_scales(points, scene_scale, config)  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
 
     return InitResult(
