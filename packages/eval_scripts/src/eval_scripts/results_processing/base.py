@@ -71,6 +71,7 @@ CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
     "dense_init.target_points_fraction": defaulter(default="1.0"),
     "means_lr_init": defaulter("0.00016"),
     "means_lr_final": defaulter("1.6000000000000001e-06"),
+    "nanogs_simplify_iter": defaulter("-1"),
 }
 
 
