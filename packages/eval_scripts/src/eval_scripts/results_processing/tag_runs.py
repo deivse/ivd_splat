@@ -84,15 +84,14 @@ def filter_and_tag_runs(
     """
     tagger = MLFlowTagger(tracking_uri=tracking_uri)
 
-    def tag(selection: pd.Series, tag_key: str, tag_value: str):
-        runs.df.loc[selection, tag_key] = _CONVERSIONS.get(tag_key, lambda x: x)(
-            tag_value
-        )
+    def tag(df: pd.DataFrame, selection: pd.Series, tag_key: str, tag_value: str):
+        df.loc[selection, tag_key] = _CONVERSIONS.get(tag_key, lambda x: x)(tag_value)
 
         if tag_in_db:
-            tagger.set_tag(runs.df.loc[selection, "run_id"], tag_key, tag_value)
+            tagger.set_tag(df.loc[selection, "run_id"], tag_key, tag_value)
 
-    df = runs.df
+    df = runs.df.copy()
+
     is_base_sfm_with_no_cap = (
         (df["init_method"] == "sfm")
         & (df["strategy"] == "DefaultWithGaussianCapStrategy")
@@ -124,18 +123,22 @@ def filter_and_tag_runs(
     )
 
     # Tag init size matches
-    tag(init_size_matches_sfm, "init_size_matches_sfm", "1")
-    tag(init_size_matches_real_init, "init_size_matches_real_init", "1")
-    tag(init_size_matches_gmax, "init_size_matches_gmax", "1")
+    tag(df, init_size_matches_sfm, "init_size_matches_sfm", "1")
+    tag(df, init_size_matches_real_init, "init_size_matches_real_init", "1")
+    tag(df, init_size_matches_gmax, "init_size_matches_gmax", "1")
 
     # Tag anomaly types
-    tag(~is_base_sfm_with_no_cap & ~cap_max_matches, "anomaly_type", "gmax_mismatch")
     tag(
+        df, ~is_base_sfm_with_no_cap & ~cap_max_matches, "anomaly_type", "gmax_mismatch"
+    )
+    tag(
+        df,
         ~is_base_sfm_with_no_cap & ~init_pts_matches,
         "anomaly_type",
         "init_size_mismatch",
     )
     tag(
+        df,
         ~is_base_sfm_with_no_cap & ~cap_max_matches & ~init_pts_matches,
         "anomaly_type",
         "gmax_and_init_size_mismatch",
@@ -144,7 +147,7 @@ def filter_and_tag_runs(
     # Filter out runs marked as anomalous (gmax mismatch/init size mismatch)
     is_anomalous = df["anomaly_type"].notna()
     print(f"Filtering out {is_anomalous.sum()} anomalous runs.")
-    df = df[~is_anomalous]
+    df = df[~is_anomalous].copy()
     runs.df = df
 
     # dataset is first part of scene before '/'
@@ -154,12 +157,24 @@ def filter_and_tag_runs(
             default_strategy_runs = runs.get_runs_with_params(
                 get_default_strategy_args(strategy, dataset)
             )
+            default_ids = default_strategy_runs.df["run_id"].copy()
+            subset_mask = df["strategy"].eq(strategy) & df["scene"].str.startswith(
+                dataset + "/"
+            )
+            is_in_default = df["run_id"].isin(default_ids)
+            default_mask = is_in_default & subset_mask
+            nondefault_mask = ~is_in_default & subset_mask
             tag(
-                df["run_id"].isin(default_strategy_runs.df["run_id"])
-                & df["strategy"].eq(strategy)
-                & df["scene"].str.startswith(dataset + "/"),
+                df,
+                default_mask,
                 "is_default_strategy_config",
                 "1",
+            )
+            tag(
+                df,
+                nondefault_mask,
+                "is_default_strategy_config",
+                "0",
             )
 
     is_sfm_baseline = (
@@ -167,6 +182,7 @@ def filter_and_tag_runs(
         & df["is_default_strategy_config"].eq(True)
         & df["gaussian_cap_fraction"].eq("1.0")
     )
-    tag(is_sfm_baseline, "init_group", "sfm_baseline")
+    tag(df, is_sfm_baseline, "init_group", "sfm_baseline")
+    runs.df = df
 
     return runs
