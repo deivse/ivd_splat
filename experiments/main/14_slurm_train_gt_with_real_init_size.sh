@@ -46,7 +46,7 @@ ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
 
 # MCMC
 for dataset in $GT_DATASETS_EXCEPT_ETH3D; do
-    # If contains scannet++, use custom opacity reg for MCMC since default causes uncontrollable growth of gaussians
+    # If contains scannet++, use custom opacity reg for MCMC
     if [[ $dataset == *"scannet++"* ]]; then
         opacity_reg_config="opacity_reg={$SCANNETPP_MCMC_CUSTOM_OPACITY_REG}"
     else

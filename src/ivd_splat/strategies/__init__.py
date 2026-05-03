@@ -5,6 +5,7 @@ import sys
 import logging
 
 from ivd_splat.strategies.base import IVDSplatBaseStrategy
+from ivd_splat.strategies.inria import INRIAStrategy
 
 from .default_without_adc import DefaultWithoutADCStrategy
 from .default_with_gaussian_cap import DefaultWithGaussianCapStrategy
@@ -49,6 +50,7 @@ ALL_STRATEGY_CLASSES = [
     DefaultWithGaussianCapStrategy,
     MCMCStrategy,
     IDHFRStrategy,
+    INRIAStrategy,
     *ADDITIONAL_STRATEGY_CLASSES,
 ]
 
@@ -57,4 +59,5 @@ __all__ = [
     "DefaultWithGaussianCapStrategy",
     "MCMCStrategy",
     "IDHFRStrategy",
+    "INRIAStrategy",
 ] + [cls.__name__ for cls in ADDITIONAL_STRATEGY_CLASSES]
