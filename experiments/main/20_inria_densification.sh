@@ -50,7 +50,19 @@ ivd_splat_runner --datasets $GT_DATASETS \
 INIT_METHODS="monodepth edgs laser_scan"
 
 for init_method in $INIT_METHODS; do
-    ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+	ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
+        --method ivd-splat \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={INRIAStrategy}" \
+        --init_method $init_method \
+        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+done
+
+INIT_METHODS="monodepth edgs"
+
+for init_method in $INIT_METHODS; do
+	ivd_splat_runner --datasets $OTHER_DATASETS \
         --method ivd-splat \
         --output-dir $RESULTS_DIR \
         --configs "strategy={INRIAStrategy}" \
