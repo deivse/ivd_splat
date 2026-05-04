@@ -44,20 +44,11 @@ ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
     --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
-# MCMC
-for dataset in $GT_DATASETS_EXCEPT_ETH3D; do
-    # If contains scannet++, use custom opacity reg for MCMC
-    if [[ $dataset == *"scannet++"* ]]; then
-        opacity_reg_config="opacity_reg={$SCANNETPP_MCMC_CUSTOM_OPACITY_REG}"
-    else
-        opacity_reg_config=""
-    fi
 
-    ivd_splat_runner --datasets $dataset \
-        --method ivd-splat \
-        --output-dir $RESULTS_DIR \
-        --configs "strategy={MCMCStrategy} $opacity_reg_config" \
-        --init_method $INIT_METHOD \
-        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
-done
+ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
+    --method ivd-splat \
+    --output-dir $RESULTS_DIR \
+    --configs "strategy={MCMCStrategy}" \
+    --init_method $INIT_METHOD \
+    --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE

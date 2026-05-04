@@ -47,6 +47,7 @@ ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
 # MCMC
+# TODO: MCMC
 for dataset in $ALL_DATASETS_EXCEPT_ETH3D; do
     # If contains scannet++, use custom opacity reg for MCMC
     if [[ $dataset == *"scannet++"* ]]; then
