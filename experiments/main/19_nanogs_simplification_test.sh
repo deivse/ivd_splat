@@ -33,6 +33,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "$NANOGS_CONFIG dense_init.target_points_fraction={$INIT_FRACTIONS} strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" 
 
 # MCMC
+# TODO
 for dataset in $GT_DATASETS; do
     # If contains scannet++, use custom opacity reg for MCMC since default is too high and causes all points to be removed.
     if [[ $dataset == *"scannet++"* ]]; then
@@ -67,6 +68,7 @@ for init_method in $INIT_METHODS; do
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
     # MCMC
+    # TODO
     for dataset in $ALL_DATASETS_EXCEPT_ETH3D; do
         # If contains scannet++, use custom opacity reg for MCMC
         if [[ $dataset == *"scannet++"* ]]; then
@@ -96,6 +98,7 @@ ivd_splat_runner --datasets $ALL_DATASETS \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE # Ensure max is the same as without NanoGS (it is not a given)
 
 # MCMC
+# TODO
 for dataset in $ALL_DATASETS; do
     # If contains scannet++, use custom opacity reg for MCMC
     if [[ $dataset == *"scannet++"* ]]; then
