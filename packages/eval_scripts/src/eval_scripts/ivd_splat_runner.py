@@ -399,6 +399,8 @@ def process_combination(
         args.init_method_config,
         config_name,
     )
+    # Follow symlinks etc.
+    output_dir = output_dir.resolve()
 
     ansiesc_print(
         f"Processing '{config_name}' on {scene}. (Outputting to: {output_dir})",
