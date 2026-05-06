@@ -328,6 +328,9 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
+        extra_signals = self.cfg.strategy.get_extra_signals(
+            self.splats, self.strategy_state
+        )
         self.last_rasterization_args = {
             "means": means,
             "quats": quats,
@@ -344,11 +347,11 @@ class Runner:
             "rasterize_mode": rasterize_mode,
             "distributed": self.world_size > 1,
             "camera_model": self.cfg.camera_model,
-            "extra_signals": self.cfg.strategy.get_extra_signals(
-                self.splats, self.strategy_state
-            ),
             **kwargs,
         }
+        if extra_signals is not None:
+            self.last_rasterization_args["extra_signals"] = extra_signals
+
         render_colors, render_alphas, info = rasterization(
             **self.last_rasterization_args
         )
