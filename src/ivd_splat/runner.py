@@ -344,6 +344,9 @@ class Runner:
             "rasterize_mode": rasterize_mode,
             "distributed": self.world_size > 1,
             "camera_model": self.cfg.camera_model,
+            "extra_signals": self.cfg.strategy.get_extra_signals(
+                self.splats, self.strategy_state
+            ),
             **kwargs,
         }
         render_colors, render_alphas, info = rasterization(
@@ -533,6 +536,17 @@ class Runner:
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
 
+            loss += self.cfg.strategy.get_additional_loss_term(
+                IVDSplatBaseStrategy.AdditionalLossArgs(
+                    rendered_image=colors,
+                    rendered_opacity=alphas,
+                    gt_image=pixels,
+                    state=self.strategy_state,
+                    step=step,
+                    info=info,
+                )
+            )
+
             loss.backward()
 
             if device.startswith("cuda"):
@@ -621,6 +635,8 @@ class Runner:
                     params=self.splats,
                     optimizers=self.optimizers,
                     state=self.strategy_state,
+                    rendered_image=colors,
+                    gt_image=pixels,
                     step=step,
                     info=info,
                     packed=cfg.packed,
