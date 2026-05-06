@@ -40,7 +40,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
 
 ## Fractions of G_max
-ivd_splat_runner --datasets $GT_DATASETS \ 
+ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
     --init_method laser_scan \
     --output-dir $RESULTS_DIR \
@@ -49,7 +49,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "strategy={INRIAStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" 
 
 ## Full
-ivd_splat_runner --datasets $GT_DATASETS \ 
+ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
     --init_method laser_scan \
     --output-dir $RESULTS_DIR \
@@ -58,7 +58,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "strategy={INRIAStrategy}" 
 
 ## Noise and half G_max
-ivd_splat_runner --datasets $GT_DATASETS \ 
+ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
     --init_method laser_scan \
     --output-dir $RESULTS_DIR \
