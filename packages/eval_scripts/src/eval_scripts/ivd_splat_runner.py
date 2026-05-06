@@ -502,6 +502,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     args = tyro.cli(IVDRunnerArguments)
+    args.output_dir = args.output_dir.resolve()
 
     configs = load_configs(args.configs, args.configs_file)
     scenes = get_scenes_from_args(args.scenes, args.datasets)
