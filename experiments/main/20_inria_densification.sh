@@ -15,6 +15,9 @@ REPO_PATH="$HOME/ivd_splat"
 source "$REPO_PATH/experiments/common_slurm_setup.sh"
 source "$REPO_PATH/experiments/main/common_vars.sh"
 
+POS_NOISE_SCALES="0.01, 0.1"
+INIT_FRACTIONS="0.5, 0.75"
+
 # SfM
 
 ivd_splat_runner --datasets $ALL_DATASETS \
@@ -27,15 +30,6 @@ ivd_splat_runner --datasets $ALL_DATASETS \
     
 # Laser Scan
 
-## Fractions of G_max
-ivd_splat_runner --datasets $GT_DATASETS \ 
-    --method ivd-splat \
-    --init_method laser_scan \
-    --output-dir $RESULTS_DIR \
-    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-    --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-    --configs "strategy={INRIAStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" 
-
 ## Same as SfM init size
 ivd_splat_runner --datasets $GT_DATASETS \
     --method ivd-splat \
@@ -45,6 +39,55 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
 
+## Fractions of G_max
+ivd_splat_runner --datasets $GT_DATASETS \ 
+    --method ivd-splat \
+    --init_method laser_scan \
+    --output-dir $RESULTS_DIR \
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --configs "strategy={INRIAStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" 
+
+## Full
+ivd_splat_runner --datasets $GT_DATASETS \ 
+    --method ivd-splat \
+    --init_method laser_scan \
+    --output-dir $RESULTS_DIR \
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --configs "strategy={INRIAStrategy}" 
+
+## Noise and half G_max
+ivd_splat_runner --datasets $GT_DATASETS \ 
+    --method ivd-splat \
+    --init_method laser_scan \
+    --output-dir $RESULTS_DIR \
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --configs "strategy={INRIAStrategy} dense_init.target_points_fraction={0.5} init.position_noise_std={$POS_NOISE_SCALES}" 
+
+# Gaussian cap fractions with SfM and GT init at same size as SfM.
+GAUSSIAN_CAP_FRACTIONS="0.75 1.25"
+for fract in $GAUSSIAN_CAP_FRACTIONS; do
+    ivd_splat_runner --datasets $GT_DATASETS \
+        --method ivd-splat \
+        --init_method sfm \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={INRIAStrategy}" \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_fraction=${fract}
+
+    
+    # 3DGS MCMC with various init fractions.
+    ivd_splat_runner --datasets $GT_DATASETS \
+        --method ivd-splat \
+        --init_method laser_scan \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={INRIAStrategy} dense_init.target_points_fraction={0.5}" \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_fraction=${fract}
+done
 
 # Monodepth, EDGS, and Laser Scan at same init size as those.
 INIT_METHODS="monodepth edgs laser_scan"
