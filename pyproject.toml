@@ -31,7 +31,7 @@ dependencies = [
   "scikit-image>=0.25.2",
   "eval_scripts",
   "transformers>=4.57.5",
-  "gsplat==1.5.3",
+  # "gsplat==1.5.3",
   "torchmetrics>=1.8.2",
   "tensorly>=0.9.0",
   "mlflow>=3.9.0",

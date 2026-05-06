@@ -21,6 +21,14 @@ class IVDSplatBaseStrategy(Strategy, SerializableConfig, abc.ABC):
         step: int
         info: Dict[str, Any]
 
+    class AdditionalLossArgs(typing.NamedTuple):
+        rendered_image: torch.Tensor
+        rendered_opacity: torch.Tensor
+        gt_image: torch.Tensor
+        state: Dict[str, Any]
+        step: int
+        info: Dict[str, Any]
+
     class StepPostBackwardArgs(typing.NamedTuple):
         """Arguments for the `step_post_backward` callback."""
 
@@ -28,6 +36,10 @@ class IVDSplatBaseStrategy(Strategy, SerializableConfig, abc.ABC):
         optimizers: Dict[str, torch.optim.Optimizer]
         # Last args passed to gsplat.rendering.rasterization() in the current step.
         last_rasterization_args: Dict
+        # Image rendered in the current step (output of `gsplat.rendering.rasterization()`).
+        rendered_image: torch.Tensor
+        # GT image for the current step.
+        gt_image: torch.Tensor
         # The strategy state as created by `initialize_state`. Can be updated in-place across steps.
         state: Dict[str, Any]
         # The current step number.
@@ -52,6 +64,34 @@ class IVDSplatBaseStrategy(Strategy, SerializableConfig, abc.ABC):
             A (non-nested) dict mapping config field names to their default values for this strategy.
         """
         return {}
+
+    def get_extra_signals(
+        self, splat_params, strategy_state: Dict[str, Any]
+    ) -> Optional[torch.Tensor]:
+        """Passed to `gsplat.rendering.rasterization()` as the `extra_signals` argument. The rendering result, if any is provided to step_post_backward via the `info` argument.
+
+        Args:
+            splat_params: The current splat parameter dict (runner.splats)`.
+            strategy_state: The current strategy state as created by `initialize_state` and updated across steps.
+        Returns:
+            A tensor of shape (num_points, num_extra_signals) containing extra signals to be rasterized, or None to not use extra signals.
+        """
+        return None
+
+    def get_additional_loss_term(
+        self, args: AdditionalLossArgs
+    ) -> Optional[torch.Tensor]:
+        """Get an additional loss term to be added to the main loss in the current step.
+
+        This can be used to implement strategies that require an additional loss term besides the main image reconstruction loss.
+        The returned loss term will be added to the main loss before calling `loss.backward()`.
+
+        Args:
+            args: An AdditionalLossArgs containing relevant information for computing the additional loss term.
+        Returns:
+            A scalar tensor representing the additional loss term to be added to the main loss. Return 0 or None to not add any additional loss term.
+        """
+        return 0.0
 
     @abc.abstractmethod
     def get_cap_max(self) -> Optional[int]:
