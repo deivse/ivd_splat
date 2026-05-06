@@ -227,17 +227,6 @@ class RevDGSStrategy(IVDSplatBaseStrategy):
         eps = 1e-7
         params["opacities"].data.copy_(torch.logit(new_alpha.clamp(eps, 1 - eps)))
 
-        state["extra_signals"].requires_grad_(True)
-        # Reset max error contribs
-        state["max_error_contribs"] = torch.full(
-            (params["means"].shape[0],),
-            -torch.finfo(torch.float32).max,
-            dtype=torch.float32,
-            device=params["means"].device,
-        )
-
-        torch.cuda.empty_cache()
-
         if self.debug_exports:
             # visualize error contribs
             from matplotlib import cm
@@ -262,6 +251,17 @@ class RevDGSStrategy(IVDSplatBaseStrategy):
                     shN=torch.zeros_like(args.params["shN"]).detach().cpu(),
                 ),
             )
+
+        state["extra_signals"].requires_grad_(True)
+        # Reset max error contribs
+        state["max_error_contribs"] = torch.full(
+            (params["means"].shape[0],),
+            -torch.finfo(torch.float32).max,
+            dtype=torch.float32,
+            device=params["means"].device,
+        )
+
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def _grow_gs(
