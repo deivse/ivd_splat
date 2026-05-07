@@ -29,6 +29,11 @@ init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --output-dir $RESULTS_DIR
 
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+    --method edgs \
+    --configs "full_sh_init=True" \
+    --output-dir $RESULTS_DIR
+
+init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method monodepth \
     --output-dir $RESULTS_DIR \
     --extra-args="--ignore-depth-cache=True" # So runtimes are real.
