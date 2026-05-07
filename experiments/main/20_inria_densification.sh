@@ -100,6 +100,17 @@ for init_method in $INIT_METHODS; do
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+    
+    if [ "$init_method" == "edgs" ]; then
+        ivd_splat_runner --datasets $OTHER_DATASETS \
+            --method ivd-splat \
+            --output-dir $RESULTS_DIR \
+            --configs "strategy={INRIAStrategy}" \
+            --init_method $init_method \
+            --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+            --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+            --init-method-config "full_sh_init=True"
+    fi
 done
 
 INIT_METHODS="monodepth edgs"
@@ -112,4 +123,15 @@ for init_method in $INIT_METHODS; do
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+
+    if [ "$init_method" == "edgs" ]; then
+        ivd_splat_runner --datasets $OTHER_DATASETS \
+            --method ivd-splat \
+            --output-dir $RESULTS_DIR \
+            --configs "strategy={INRIAStrategy}" \
+            --init_method $init_method \
+            --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+            --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+            --init-method-config "full_sh_init=True"
+    fi
 done
