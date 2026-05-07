@@ -12,6 +12,8 @@ from ivd_splat.utils.runner_utils import knn, rgb_to_sh
 from shared.point_cloud_io import load_pointcloud_ply
 from shared.splat_ply_io import SplatData, load_splat_ply
 
+from e3nn import o3
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -320,6 +322,46 @@ def _get_splat_subset_inplace(splat: SplatData, config: Config) -> None:
         splat.scales = np.log(np.exp(splat.scales) * (1 / splat_fraction))
 
 
+# def transform_shs(shs_feat, rotation_matrix):
+#     """
+#     https://github.com/graphdeco-inria/gaussian-splatting/issues/176#issuecomment-2450891300
+#     """
+#     ## rotate shs
+#     P = torch.tensor(
+#         [[0, 0, 1], [1, 0, 0], [0, 1, 0]]
+#     ).float()  # switch axes: yzx -> xyz
+
+#     permuted_rotation_matrix = P.T @ rotation_matrix @ P
+#     rot_angles = o3._rotation.matrix_to_angles(permuted_rotation_matrix)
+#     # Construction coefficient
+#     D_1 = o3.wigner_D(1, rot_angles[0], -rot_angles[1], rot_angles[2])
+#     D_2 = o3.wigner_D(2, rot_angles[0], -rot_angles[1], rot_angles[2])
+#     D_3 = o3.wigner_D(3, rot_angles[0], -rot_angles[1], rot_angles[2])
+
+#     # rotation of the shs features
+#     shs_feat[:, :3] = D_1 @ shs_feat[:, :3]
+#     shs_feat[:, 3:8] = D_2 @ shs_feat[:, 3:8]
+#     shs_feat[:, 8:15] = D_3 @ shs_feat[:, 8:15]
+#     return shs_feat
+
+
+def transform_shs(shs_feat, rotation_matrix, beta_coef=-1.0):
+    # Rotate SH values
+    P = torch.tensor([[0, 0, 1], [1, 0, 0], [0, 1, 0]]).float()
+    permuted_rotation_matrix = torch.linalg.inv(P) @ rotation_matrix @ P
+    rot_angles = o3._rotation.matrix_to_angles(permuted_rotation_matrix)
+
+    # Construct rotation matrices for SH orders
+    D_1 = o3.wigner_D(1, rot_angles[0], beta_coef * rot_angles[1], rot_angles[2])
+    D_2 = o3.wigner_D(2, rot_angles[0], beta_coef * rot_angles[1], rot_angles[2])
+    D_3 = o3.wigner_D(3, rot_angles[0], beta_coef * rot_angles[1], rot_angles[2])
+
+    # Apply rotation to SH features
+    return torch.cat(
+        (D_1 @ shs_feat[:, :3], D_2 @ shs_feat[:, 3:8], D_3 @ shs_feat[:, 8:15]), dim=1
+    )
+
+
 def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> SplatData:
     if not isinstance(parser, NerfbaselinesParser):
         raise RuntimeError(
@@ -342,6 +384,7 @@ def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> Spla
     )
     splat.means = transform_points(parser.transform, splat.means).to(torch.float32)
     splat.scales = torch.log(torch.exp(splat.scales) * scale).to(torch.float32)
+    splat.shN = transform_shs(splat.shN, torch.from_numpy(rotation).float())
 
     # TODO: this is only fine as long as the init method outputs isotropic covariances.
     # If we want to support anisotropic covariances we need to apply rotation too
