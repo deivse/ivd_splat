@@ -1,4 +1,4 @@
-# Based on code by Kotovenko et al. (2025). 
+# Based on code by Kotovenko et al. (2025).
 # Licensed for non-commercial academic/personal use only.
 # See src/edgs/LICENSE for full details.
 
@@ -580,7 +580,103 @@ def select_best_keypoints(
         indices, n_indices, :
     ]  # Shape: [N, k]
 
-    return NNs_triangulated_points_selected, np.min(NNs_errors_proj, axis=0)
+    return (
+        NNs_triangulated_points_selected,
+        np.min(NNs_errors_proj, axis=0),
+        indices,
+        n_indices,
+    )
+
+
+@torch.jit.script
+def _sh_basis_order3(x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    # x, y, z have identical shape (N, V)
+    N: int = x.shape[0]
+    V: int = x.shape[1]
+
+    sh = torch.empty((N, V, 16), dtype=x.dtype, device=x.device)
+
+    # l = 0
+    sh[..., 0] = 0.28209479177387814  # C0
+
+    # l = 1
+    sh[..., 1] = -0.4886025119029199 * y  # -C1 y
+    sh[..., 2] = 0.4886025119029199 * z  #  C1 z
+    sh[..., 3] = -0.4886025119029199 * x  # -C1 x
+
+    # l = 2
+    sh[..., 4] = 1.0925484305920792 * x * y  #  C2 xy
+    sh[..., 5] = -1.0925484305920792 * y * z  # -C2 yz
+    sh[..., 6] = 0.31539156525252005 * (3.0 * z * z - 1.0)  #  C3 (3z²−1)
+    sh[..., 7] = -1.0925484305920792 * x * z  # -C2 xz
+    sh[..., 8] = 0.5462742152960396 * (x * x - y * y)  #  C4 (x²−y²)
+
+    # l = 3
+    sh[..., 9] = -0.5900435899266435 * y * (3.0 * x * x - y * y)
+    sh[..., 10] = 2.890611442640554 * x * y * z
+    sh[..., 11] = -0.4570457994644658 * y * (5.0 * z * z - 1.0)
+    sh[..., 12] = 0.3731763325901151 * z * (5.0 * z * z - 3.0)
+    sh[..., 13] = -0.4570457994644658 * x * (5.0 * z * z - 1.0)
+    sh[..., 14] = 2.890611442640554 * z * (x * x - y * y)
+    sh[..., 15] = -1.445305721320277 * x * (x * x - 3.0 * y * y)
+
+    return sh
+
+
+def compute_spherical_harmonics(
+    view_dirs: torch.Tensor,  # (N,V,3) | device=GPU, dtype=float32
+    cols: torch.Tensor,  # (N,V,3)
+    sh_order: int = 3,
+    *,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """
+    Returns SH coefficients: (N, (sh_order+1)**2, 3)
+    Supported orders: 0-3 (fast analytic kernels).
+    """
+    assert sh_order <= 3, "fast kernel supports sh_order ≤ 3"
+
+    # Make sure the directions are unit-length and on GPU
+    dirs = F.normalize(view_dirs.to(dtype), dim=-1)  # (N,V,3)
+    x, y, z = dirs.unbind(dim=-1)  # each (N,V)
+
+    Y = _sh_basis_order3(x, y, z)[:, :, : (sh_order + 1) ** 2]  # (N,V,C)
+
+    # ---- batched least-squares (same as before, but GPU all the way) ----
+    Y_T = Y.transpose(1, 2)  # (N,C,V)
+    YTY = torch.bmm(Y_T, Y)  # (N,C,C)
+    YTY_inv = torch.linalg.pinv(YTY)  # (N,C,C)  (small, C≤16)
+    pinv_Y = torch.bmm(YTY_inv, Y_T)  # (N,C,V)
+    sh_coeff = torch.bmm(pinv_Y, cols.to(dtype).to(pinv_Y.device))  # (N,C,3)
+
+    return sh_coeff
+
+
+# pixel_to_world.py  — accept NDC directly, use world_view_transform.inverse()
+def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, depth: float = 1.0):
+    """uv_ndc: (..., 2) with values in [-1, 1], ordered (x_ndc, y_ndc)."""
+    device = uv_ndc.device
+    W, H = camera.image_width, camera.image_height
+    fx = W / (2 * np.tan(camera.FoVx / 2))
+    fy = H / (2 * np.tan(camera.FoVy / 2))
+    cx, cy = W * 0.5, H * 0.5
+
+    u_pix = (uv_ndc[..., 0] + 1.0) * 0.5 * W
+    v_pix = (uv_ndc[..., 1] + 1.0) * 0.5 * H
+
+    x_cam = (u_pix - cx) * depth / fx
+    y_cam = (v_pix - cy) * depth / fy
+    z_cam = torch.full_like(x_cam, depth)
+    ones = torch.ones_like(x_cam)
+    p_cam_h = torch.stack([x_cam, y_cam, z_cam, ones], dim=-1)  # (..., 4)
+
+    # Row-vec convention: p_view = p_world @ world_view_transform
+    wvt_inv = camera.world_view_transform.inverse().to(
+        device=device, dtype=p_cam_h.dtype
+    )
+    p_world_h = p_cam_h @ wvt_inv
+    return p_world_h[..., :3]
+
 
 @torch.no_grad()
 def init_gaussians_with_corr(
@@ -641,10 +737,11 @@ def init_gaussians_with_corr(
     means_per_img: list[torch.Tensor] = []
     opacities_per_img: list[torch.Tensor] = []
     sh0_per_img: list[torch.Tensor] = []
+    shN_per_img: list[torch.Tensor] = []
     scales_per_img = []
 
     # Run roma_model.match once to kinda initialize the model
-    
+
     viewpoint_cam1 = viewpoint_stack[0]
     viewpoint_cam2 = viewpoint_stack[1]
     imA = viewpoint_cam1.original_image.detach().cpu().numpy().transpose(1, 2, 0)
@@ -653,15 +750,13 @@ def init_gaussians_with_corr(
     imB = Image.fromarray(np.clip(imB * 255, 0, 255).astype(np.uint8))
     warp, certainty_warp = roma_model.match(imA, imB, device=device)
     print("Once run full roma_model.match warp.shape:", warp.shape)
-    print(
-        "Once run full roma_model.match certainty_warp.shape:", certainty_warp.shape
-    )
+    print("Once run full roma_model.match certainty_warp.shape:", certainty_warp.shape)
     del warp, certainty_warp
     torch.cuda.empty_cache()
 
     for source_idx in tqdm(sorted(selected_indices)):
         # 1. Compute keypoints and warping for all the neigboring views
-        
+
         # Call the aggregation function to get imA and imB_compound
         (
             certainties_max,
@@ -681,7 +776,7 @@ def init_gaussians_with_corr(
         )
 
         # Triangulate keypoints
-        
+
         matches = warps_max
         certainty = certainties_max
         certainty = certainty.clone()
@@ -706,10 +801,13 @@ def init_gaussians_with_corr(
             "certainties_all": certainties_all,
             "warps_all": warps_all,
             "triangulated_points": [],
+            "source_points_world_A": [],
+            "source_points_world_B": [],
             "triangulated_points_errors_proj1": [],
             "triangulated_points_errors_proj2": [],
+            "points_B_camera_centers": [],
         }
-        
+
         for NN_idx in tqdm(range(len(warps_all))):
             matches_NN = warps_all[NN_idx].reshape(-1, 4)[good_samples]
 
@@ -753,11 +851,24 @@ def init_gaussians_with_corr(
             reference_image_dict["triangulated_points_errors_proj2"].append(
                 triangulated_points_errors_proj2
             )
-
+            reference_image_dict["source_points_world_A"].append(
+                pixel_to_world(
+                    torch.tensor(kptsA_np[:M], device=device),
+                    viewpoint_stack[source_idx],
+                )
+            )
+            reference_image_dict["source_points_world_B"].append(
+                pixel_to_world(
+                    torch.tensor(kptsB_np[:M], device=device),
+                    viewpoint_stack[closest_indices_selected[source_idx, NN_idx]],
+                )
+            )
 
         (
             NNs_triangulated_points_selected,
             NNs_triangulated_points_selected_proj_errors,
+            indices,
+            n_indices,
         ) = select_best_keypoints(
             NNs_triangulated_points=torch.stack(
                 reference_image_dict["triangulated_points"], dim=0
@@ -774,7 +885,6 @@ def init_gaussians_with_corr(
         viewpoint_cam1 = viewpoint_stack[source_idx]
         N = len(NNs_triangulated_points_selected)
 
-        
         if cfg.bad_points_mode == "invisible":
             reduce_opacity_mask = (
                 torch.tensor(
@@ -812,6 +922,43 @@ def init_gaussians_with_corr(
                 torch.tensor(kptsA_color[points_to_keep].astype(np.float32) / 255.0)
             ).unsqueeze(1)
         )
+        if cfg.full_sh_init:
+            pixels_in_world_space_A = torch.stack(
+                reference_image_dict["source_points_world_A"], dim=0
+            )[
+                indices, n_indices, :
+            ]  # Shape: [N, 3]
+            pixels_in_world_space_B = torch.stack(
+                reference_image_dict["source_points_world_B"], dim=0
+            )[
+                indices, n_indices, :
+            ]  # Shape: [N, 3]
+
+            directions_to_cam1 = F.normalize(
+                pixels_in_world_space_A[points_to_keep] - new_xyz,
+                dim=-1,
+            )
+            directions_to_cam2 = F.normalize(
+                pixels_in_world_space_B[points_to_keep] - new_xyz,
+                dim=-1,
+            )
+            directions = torch.stack([directions_to_cam1, directions_to_cam2], dim=1)
+            colors = torch.stack(
+                [
+                    torch.tensor(
+                        kptsA_color[points_to_keep].astype(np.float32) / 255.0
+                    ),
+                    torch.tensor(
+                        kptsB_color[points_to_keep].astype(np.float32) / 255.0
+                    ),
+                ],
+                dim=1,
+            )
+
+            sh = compute_spherical_harmonics(
+                directions, colors, sh_order=cfg.init_sh_order
+            )  # (N,2,C,3)
+            shN_per_img.append(sh[:, 1:, :].clone())
 
         # NOTE(desiatov): The original code is on the line below, it's weird, but mine does the same thing, pretty sure.
         # all_new_opacities.append(torch.stack([gaussians._opacity[-1].clone().detach()] * N, dim=0) * 0. - mask_bad_points * (1e1))
@@ -824,13 +971,19 @@ def init_gaussians_with_corr(
             viewpoint_cam1.camera_center.clone().detach() - new_xyz, dim=1, ord=2
         )
         scales_per_img.append(
-            torch.log(
-                (dist_points_to_cam1 * scaling_factor).unsqueeze(1).repeat(1, 3)
-            )
+            torch.log((dist_points_to_cam1 * scaling_factor).unsqueeze(1).repeat(1, 3))
         )
 
     means = torch.cat(means_per_img, dim=0)
     sh0 = torch.cat(sh0_per_img, dim=0)
+    if cfg.full_sh_init:
+        shN = torch.cat(shN_per_img, dim=0)
+    else:
+        shN = torch.zeros(
+            (means.shape[0], (cfg.init_sh_order + 1) ** 2 - 1, 3),
+            dtype=torch.float32,
+            device=device,
+        )
 
     quats = torch.zeros((means.shape[0], 4), device=device)
     quats[:, 0] = 1
@@ -841,15 +994,16 @@ def init_gaussians_with_corr(
         quats=quats,
         opacities=torch.cat(opacities_per_img, dim=0).squeeze(1),
         sh0=sh0.to(device),
-        shN=torch.zeros(
-            (means.shape[0], (cfg.init_sh_order + 1) ** 2 - 1, 3),
-            dtype=torch.float32,
-            device=device,
-        ),
+        shN=shN.to(device),
     )
 
 
-def edgs_init(config: EDGSConfig, dataset: Dataset, device: TorchDevice, mlflow_run: mlflow.ActiveRun | None):
+def edgs_init(
+    config: EDGSConfig,
+    dataset: Dataset,
+    device: TorchDevice,
+    mlflow_run: mlflow.ActiveRun | None,
+):
     with tempfile.TemporaryDirectory() as tmpdir:
         scene_info = nerfbaselines_dataset_to_3dgs_scene_info(
             dataset, tmpdir, add_dataset_points_to_scene=False
@@ -859,11 +1013,13 @@ def edgs_init(config: EDGSConfig, dataset: Dataset, device: TorchDevice, mlflow_
         )
         plt.ioff()
         start_time = datetime.now()
-        retval =  init_gaussians_with_corr(
+        retval = init_gaussians_with_corr(
             camera_list, config, device=device, verbose=False
         )
         end_time = datetime.now()
         if mlflow_run is not None:
-            mlflow.log_metric("init_only_runtime", (end_time - start_time).total_seconds())
+            mlflow.log_metric(
+                "init_only_runtime", (end_time - start_time).total_seconds()
+            )
 
     return retval

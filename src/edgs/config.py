@@ -33,5 +33,7 @@ class EDGSConfig(SerializableConfig):
     # as the "effective size" will potentially be lower due to invisible Gaussians.
     bad_points_mode: Literal["invisible", "remove"] = "remove"
 
+    full_sh_init: bool = False
+
     # Whether to export the output point cloud as a ply file for visualization. The point cloud will be saved to {output_dir}/edgs_points3D.ply.
     output_pointcloud: bool = True
