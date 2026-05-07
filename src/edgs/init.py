@@ -582,7 +582,7 @@ def select_best_keypoints(
 
     return NNs_triangulated_points_selected, np.min(NNs_errors_proj, axis=0)
 
-
+@torch.no_grad()
 def init_gaussians_with_corr(
     camera_list: list[Camera],
     cfg: EDGSConfig,
@@ -644,60 +644,60 @@ def init_gaussians_with_corr(
     scales_per_img = []
 
     # Run roma_model.match once to kinda initialize the model
-    with torch.no_grad():
-        viewpoint_cam1 = viewpoint_stack[0]
-        viewpoint_cam2 = viewpoint_stack[1]
-        imA = viewpoint_cam1.original_image.detach().cpu().numpy().transpose(1, 2, 0)
-        imB = viewpoint_cam2.original_image.detach().cpu().numpy().transpose(1, 2, 0)
-        imA = Image.fromarray(np.clip(imA * 255, 0, 255).astype(np.uint8))
-        imB = Image.fromarray(np.clip(imB * 255, 0, 255).astype(np.uint8))
-        warp, certainty_warp = roma_model.match(imA, imB, device=device)
-        print("Once run full roma_model.match warp.shape:", warp.shape)
-        print(
-            "Once run full roma_model.match certainty_warp.shape:", certainty_warp.shape
-        )
-        del warp, certainty_warp
-        torch.cuda.empty_cache()
+    
+    viewpoint_cam1 = viewpoint_stack[0]
+    viewpoint_cam2 = viewpoint_stack[1]
+    imA = viewpoint_cam1.original_image.detach().cpu().numpy().transpose(1, 2, 0)
+    imB = viewpoint_cam2.original_image.detach().cpu().numpy().transpose(1, 2, 0)
+    imA = Image.fromarray(np.clip(imA * 255, 0, 255).astype(np.uint8))
+    imB = Image.fromarray(np.clip(imB * 255, 0, 255).astype(np.uint8))
+    warp, certainty_warp = roma_model.match(imA, imB, device=device)
+    print("Once run full roma_model.match warp.shape:", warp.shape)
+    print(
+        "Once run full roma_model.match certainty_warp.shape:", certainty_warp.shape
+    )
+    del warp, certainty_warp
+    torch.cuda.empty_cache()
 
     for source_idx in tqdm(sorted(selected_indices)):
         # 1. Compute keypoints and warping for all the neigboring views
-        with torch.no_grad():
-            # Call the aggregation function to get imA and imB_compound
-            (
-                certainties_max,
-                warps_max,
-                certainties_max_idcs,
-                imA,
-                imB_compound,
-                certainties_all,
-                warps_all,
-            ) = aggregate_confidences_and_warps(
-                viewpoint_stack=viewpoint_stack,
-                closest_indices=closest_indices_selected,
-                roma_model=roma_model,
-                source_idx=source_idx,
-                verbose=verbose,
-                output_dict=visualizations,
-            )
+        
+        # Call the aggregation function to get imA and imB_compound
+        (
+            certainties_max,
+            warps_max,
+            certainties_max_idcs,
+            imA,
+            imB_compound,
+            certainties_all,
+            warps_all,
+        ) = aggregate_confidences_and_warps(
+            viewpoint_stack=viewpoint_stack,
+            closest_indices=closest_indices_selected,
+            roma_model=roma_model,
+            source_idx=source_idx,
+            verbose=verbose,
+            output_dict=visualizations,
+        )
 
         # Triangulate keypoints
-        with torch.no_grad():
-            matches = warps_max
-            certainty = certainties_max
-            certainty = certainty.clone()
-            certainty[certainty > upper_thresh] = 1
-            matches, certainty = (
-                matches.reshape(-1, 4),
-                certainty.reshape(-1),
-            )
+        
+        matches = warps_max
+        certainty = certainties_max
+        certainty = certainty.clone()
+        certainty[certainty > upper_thresh] = 1
+        matches, certainty = (
+            matches.reshape(-1, 4),
+            certainty.reshape(-1),
+        )
 
-            # Select based on certainty elements with high confidence. These are basically all of
-            # kptsA_np.
-            good_samples = torch.multinomial(
-                certainty,
-                num_samples=min(expansion_factor * M, len(certainty)),
-                replacement=False,
-            )
+        # Select based on certainty elements with high confidence. These are basically all of
+        # kptsA_np.
+        good_samples = torch.multinomial(
+            certainty,
+            num_samples=min(expansion_factor * M, len(certainty)),
+            replacement=False,
+        )
 
         certainties_max, warps_max, certainties_max_idcs, imA, imB_compound, certainties_all, warps_all
         reference_image_dict = {
@@ -709,125 +709,125 @@ def init_gaussians_with_corr(
             "triangulated_points_errors_proj1": [],
             "triangulated_points_errors_proj2": [],
         }
-        with torch.no_grad():
-            for NN_idx in tqdm(range(len(warps_all))):
-                matches_NN = warps_all[NN_idx].reshape(-1, 4)[good_samples]
+        
+        for NN_idx in tqdm(range(len(warps_all))):
+            matches_NN = warps_all[NN_idx].reshape(-1, 4)[good_samples]
 
-                # Extract keypoints and colors
-                (
-                    kptsA_np,
-                    kptsB_np,
-                    kptsB_proj_matrices_idcs,
-                    kptsA_color,
-                    kptsB_color,
-                ) = extract_keypoints_and_colors(
-                    imA,
-                    imB_compound,
-                    certainties_max,
-                    certainties_max_idcs,
-                    matches_NN,
-                    roma_model,
-                )
-
-                proj_matrices_A = viewpoint_stack[source_idx].full_proj_transform
-                proj_matrices_B = viewpoint_stack[
-                    closest_indices_selected[source_idx, NN_idx]
-                ].full_proj_transform
-                (
-                    triangulated_points,
-                    triangulated_points_errors_proj1,
-                    triangulated_points_errors_proj2,
-                ) = triangulate_points(
-                    P1=torch.stack([proj_matrices_A] * M, dim=0),
-                    P2=torch.stack([proj_matrices_B] * M, dim=0),
-                    k1_x=kptsA_np[:M, 0],
-                    k1_y=kptsA_np[:M, 1],
-                    k2_x=kptsB_np[:M, 0],
-                    k2_y=kptsB_np[:M, 1],
-                )
-
-                reference_image_dict["triangulated_points"].append(triangulated_points)
-                reference_image_dict["triangulated_points_errors_proj1"].append(
-                    triangulated_points_errors_proj1
-                )
-                reference_image_dict["triangulated_points_errors_proj2"].append(
-                    triangulated_points_errors_proj2
-                )
-
-        with torch.no_grad():
+            # Extract keypoints and colors
             (
-                NNs_triangulated_points_selected,
-                NNs_triangulated_points_selected_proj_errors,
-            ) = select_best_keypoints(
-                NNs_triangulated_points=torch.stack(
-                    reference_image_dict["triangulated_points"], dim=0
-                ),
-                NNs_errors_proj1=np.stack(
-                    reference_image_dict["triangulated_points_errors_proj1"], axis=0
-                ),
-                NNs_errors_proj2=np.stack(
-                    reference_image_dict["triangulated_points_errors_proj2"], axis=0
-                ),
+                kptsA_np,
+                kptsB_np,
+                kptsB_proj_matrices_idcs,
+                kptsA_color,
+                kptsB_color,
+            ) = extract_keypoints_and_colors(
+                imA,
+                imB_compound,
+                certainties_max,
+                certainties_max_idcs,
+                matches_NN,
+                roma_model,
             )
+
+            proj_matrices_A = viewpoint_stack[source_idx].full_proj_transform
+            proj_matrices_B = viewpoint_stack[
+                closest_indices_selected[source_idx, NN_idx]
+            ].full_proj_transform
+            (
+                triangulated_points,
+                triangulated_points_errors_proj1,
+                triangulated_points_errors_proj2,
+            ) = triangulate_points(
+                P1=torch.stack([proj_matrices_A] * M, dim=0),
+                P2=torch.stack([proj_matrices_B] * M, dim=0),
+                k1_x=kptsA_np[:M, 0],
+                k1_y=kptsA_np[:M, 1],
+                k2_x=kptsB_np[:M, 0],
+                k2_y=kptsB_np[:M, 1],
+            )
+
+            reference_image_dict["triangulated_points"].append(triangulated_points)
+            reference_image_dict["triangulated_points_errors_proj1"].append(
+                triangulated_points_errors_proj1
+            )
+            reference_image_dict["triangulated_points_errors_proj2"].append(
+                triangulated_points_errors_proj2
+            )
+
+
+        (
+            NNs_triangulated_points_selected,
+            NNs_triangulated_points_selected_proj_errors,
+        ) = select_best_keypoints(
+            NNs_triangulated_points=torch.stack(
+                reference_image_dict["triangulated_points"], dim=0
+            ),
+            NNs_errors_proj1=np.stack(
+                reference_image_dict["triangulated_points_errors_proj1"], axis=0
+            ),
+            NNs_errors_proj2=np.stack(
+                reference_image_dict["triangulated_points_errors_proj2"], axis=0
+            ),
+        )
 
         # 4. Save as gaussians
         viewpoint_cam1 = viewpoint_stack[source_idx]
         N = len(NNs_triangulated_points_selected)
 
-        with torch.no_grad():
-            if cfg.bad_points_mode == "invisible":
-                reduce_opacity_mask = (
-                    torch.tensor(
-                        NNs_triangulated_points_selected_proj_errors
-                        > keypoint_fit_error_tolerance,
-                        dtype=torch.float32,
-                    ).to(device)
-                    # Without this unsqueeze, broadcasting somehow uses additional VRAM with each iteration
-                    .unsqueeze(1)
-                )
-
-                points_to_keep = torch.ones(N, device="cpu", dtype=torch.bool)
-            elif cfg.bad_points_mode == "remove":
-                points_to_keep = torch.tensor(
+        
+        if cfg.bad_points_mode == "invisible":
+            reduce_opacity_mask = (
+                torch.tensor(
                     NNs_triangulated_points_selected_proj_errors
-                    <= keypoint_fit_error_tolerance,
-                    dtype=torch.bool,
-                ).to("cpu")
-                reduce_opacity_mask = (
-                    torch.zeros(
-                        int(points_to_keep.sum().item()),
-                        device=device,
-                        dtype=torch.float32,
-                    )
-                    # Without this unsqueeze, broadcasting somehow uses additional VRAM with each iteration
-                    .unsqueeze(1)
+                    > keypoint_fit_error_tolerance,
+                    dtype=torch.float32,
+                ).to(device)
+                # Without this unsqueeze, broadcasting somehow uses additional VRAM with each iteration
+                .unsqueeze(1)
+            )
+
+            points_to_keep = torch.ones(N, device="cpu", dtype=torch.bool)
+        elif cfg.bad_points_mode == "remove":
+            points_to_keep = torch.tensor(
+                NNs_triangulated_points_selected_proj_errors
+                <= keypoint_fit_error_tolerance,
+                dtype=torch.bool,
+            ).to("cpu")
+            reduce_opacity_mask = (
+                torch.zeros(
+                    int(points_to_keep.sum().item()),
+                    device=device,
+                    dtype=torch.float32,
                 )
-            else:
-                raise ValueError(f"Unknown bad_points_mode: {cfg.bad_points_mode}")
+                # Without this unsqueeze, broadcasting somehow uses additional VRAM with each iteration
+                .unsqueeze(1)
+            )
+        else:
+            raise ValueError(f"Unknown bad_points_mode: {cfg.bad_points_mode}")
 
-            new_xyz = NNs_triangulated_points_selected[points_to_keep, :-1]
-            means_per_img.append(new_xyz)  # seeked_splats
-            sh0_per_img.append(
-                RGB2SH(
-                    torch.tensor(kptsA_color[points_to_keep].astype(np.float32) / 255.0)
-                ).unsqueeze(1)
-            )
+        new_xyz = NNs_triangulated_points_selected[points_to_keep, :-1]
+        means_per_img.append(new_xyz)  # seeked_splats
+        sh0_per_img.append(
+            RGB2SH(
+                torch.tensor(kptsA_color[points_to_keep].astype(np.float32) / 255.0)
+            ).unsqueeze(1)
+        )
 
-            # NOTE(desiatov): The original code is on the line below, it's weird, but mine does the same thing, pretty sure.
-            # all_new_opacities.append(torch.stack([gaussians._opacity[-1].clone().detach()] * N, dim=0) * 0. - mask_bad_points * (1e1))
-            opacities_per_img.append(
-                torch.zeros((int(points_to_keep.sum().item()), 1), device=device)
-                - reduce_opacity_mask * (1e1)
-            )
+        # NOTE(desiatov): The original code is on the line below, it's weird, but mine does the same thing, pretty sure.
+        # all_new_opacities.append(torch.stack([gaussians._opacity[-1].clone().detach()] * N, dim=0) * 0. - mask_bad_points * (1e1))
+        opacities_per_img.append(
+            torch.zeros((int(points_to_keep.sum().item()), 1), device=device)
+            - reduce_opacity_mask * (1e1)
+        )
 
-            dist_points_to_cam1 = torch.linalg.norm(
-                viewpoint_cam1.camera_center.clone().detach() - new_xyz, dim=1, ord=2
+        dist_points_to_cam1 = torch.linalg.norm(
+            viewpoint_cam1.camera_center.clone().detach() - new_xyz, dim=1, ord=2
+        )
+        scales_per_img.append(
+            torch.log(
+                (dist_points_to_cam1 * scaling_factor).unsqueeze(1).repeat(1, 3)
             )
-            scales_per_img.append(
-                torch.log(
-                    (dist_points_to_cam1 * scaling_factor).unsqueeze(1).repeat(1, 3)
-                )
-            )
+        )
 
     means = torch.cat(means_per_img, dim=0)
     sh0 = torch.cat(sh0_per_img, dim=0)
