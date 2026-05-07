@@ -92,9 +92,13 @@ def _parse_splat_ply_bytes(ply_bytes: bytes) -> SplatData:
     assert len(sh0_indices) == 3, "Expected 3 SH0 properties."
     sh0 = data[:, sh0_indices].reshape(num_splats, 1, 3)
 
-    shN_indices = [i for i, p in enumerate(properties) if p.startswith("f_rest")]
-    assert len(shN_indices) % 3 == 0, "SH N properties should be a multiple of 3."
-    shN = data[:, shN_indices].reshape(num_splats, len(shN_indices) // 3, 3)
+    shN_indices = [i for i, p in enumerate(properties) if p.startswith("f_rest_")]
+    # It is safer to sort these to ensure they are in order (f_rest_0, f_rest_1...)
+    shN_indices.sort(key=lambda x: int(properties[x].split('_')[-1]))
+    
+    num_sh_per_channel = len(shN_indices) // 3
+    # Reshape to (N, 3, 15) then transpose to (N, 15, 3)
+    shN = data[:, shN_indices].reshape(num_splats, 3, num_sh_per_channel).transpose(0, 2, 1)
 
     opacity_indices = [i for i, p in enumerate(properties) if p.startswith("opacity")]
     assert len(opacity_indices) == 1, "Expected 1 opacity property."
