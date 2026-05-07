@@ -18,37 +18,45 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 #######################################################################
 INIT_METHOD=edgs
 
-# No ADC
-ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-    --method ivd-splat \
-    --output-dir $RESULTS_DIR \
-    --configs "strategy={DefaultWithoutADCStrategy}" \
-    --init_method $INIT_METHOD \
-    --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE
 
-# ADC (with absgrad by default) 
-ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-    --method ivd-splat \
-    --output-dir $RESULTS_DIR \
-    --configs "strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
-    --init_method $INIT_METHOD \
-    --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+for init_config in "default" "full_sh_init=True"; do
+    # No ADC
+    ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+        --method ivd-splat \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={DefaultWithoutADCStrategy}" \
+        --init_method $INIT_METHOD \
+        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        --init-method-config "$init_config"
 
-# IDHFR
-ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-    --method ivd-splat \
-    --output-dir $RESULTS_DIR \
-    --configs "strategy={IDHFRStrategy}" \
-    --init_method $INIT_METHOD \
-    --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
 
-# MCMC
-ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-    --method ivd-splat \
-    --output-dir $RESULTS_DIR \
-    --configs "strategy={MCMCStrategy}" \
-    --init_method $INIT_METHOD \
-    --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+    # ADC (with absgrad by default) 
+    ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+        --method ivd-splat \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy.grow_grad2d={$ABSGRAD_GRAD_THRESH}" \
+        --init_method $INIT_METHOD \
+        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --init-method-config "$init_config"
+
+    # IDHFR
+    ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+        --method ivd-splat \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={IDHFRStrategy}" \
+        --init_method $INIT_METHOD \
+        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --init-method-config "$init_config"
+
+    # MCMC
+    ivd_splat_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+        --method ivd-splat \
+        --output-dir $RESULTS_DIR \
+        --configs "strategy={MCMCStrategy}" \
+        --init_method $INIT_METHOD \
+        --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --init-method-config "$init_config"
+done
