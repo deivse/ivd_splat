@@ -102,7 +102,7 @@ for init_method in $INIT_METHODS; do
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
     
     if [ "$init_method" == "edgs" ]; then
-        ivd_splat_runner --datasets $OTHER_DATASETS \
+        ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
             --method ivd-splat \
             --output-dir $RESULTS_DIR \
             --configs "strategy={INRIAStrategy}" \
