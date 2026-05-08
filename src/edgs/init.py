@@ -657,9 +657,8 @@ def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, depth: float = 1.0):
     """uv_ndc: (..., 2) with values in [-1, 1], ordered (x_ndc, y_ndc)."""
     device = uv_ndc.device
     W, H = camera.image_width, camera.image_height
-    fx = W / (2 * np.tan(camera.FoVx / 2))
-    fy = H / (2 * np.tan(camera.FoVy / 2))
-    cx, cy = W * 0.5, H * 0.5
+    fx, fy = camera.focal_x, camera.focal_y
+    cx, cy = camera.cx, camera.cy
 
     u_pix = (uv_ndc[..., 0] + 1.0) * 0.5 * W
     v_pix = (uv_ndc[..., 1] + 1.0) * 0.5 * H
@@ -863,6 +862,86 @@ def init_gaussians_with_corr(
                     viewpoint_stack[closest_indices_selected[source_idx, NN_idx]],
                 )
             )
+
+            # Visualization of 3D pixel locations and camera centers
+            if False and source_idx % 5 == 0:  # Visualize for every 5th source image
+                plt.ion()
+                fig = plt.figure(figsize=(12, 10))
+                ax = fig.add_subplot(111, projection="3d")
+
+                # Plot triangulated points
+                triangulated_pts_np = triangulated_points.cpu().numpy()
+                ax.scatter(
+                    triangulated_pts_np[:1599, 0],
+                    triangulated_pts_np[:1599, 1],
+                    triangulated_pts_np[:1599, 2],
+                    c="blue",
+                    marker="o",
+                    s=10,
+                    label="Triangulated Points",
+                    alpha=0.6,
+                )
+
+                # Plot source points in world space for both cameras
+                source_points_A_np = reference_image_dict["source_points_world_A"][-1].cpu().numpy()
+                source_points_B_np = reference_image_dict["source_points_world_B"][-1].cpu().numpy()
+                ax.scatter(
+                    source_points_A_np[:1599, 0],
+                    source_points_A_np[:1599, 1],
+                    source_points_A_np[:1599, 2],
+                    c="red",
+                    marker="x",
+                    s=50,
+                    label="Source Points Camera A",
+                    alpha=0.8,
+                )
+                ax.scatter(
+                    source_points_B_np[:1599, 0],
+                    source_points_B_np[:1599, 1],
+                    source_points_B_np[:1599, 2],
+                    c="blue",
+                    marker="x",
+                    s=50,
+                    label="Source Points Camera B",
+                    alpha=0.8,
+                )
+
+                # Plot camera centers for this and selected viewpoints (curr NN index)
+                A_center = viewpoint_stack[source_idx].camera_center.cpu().numpy()
+                B_center = viewpoint_stack[closest_indices_selected[source_idx, NN_idx]].camera_center.cpu().numpy()
+
+                ax.scatter(
+                    A_center[0],
+                    A_center[1],
+                    A_center[2],
+                    c="red",
+                    marker="^",
+                    s=200,
+                    label="Camera A Center",
+                    edgecolors="black",
+                    linewidth=2,
+                )
+                ax.scatter(
+                    B_center[0],    
+                    B_center[1],
+                    B_center[2],
+                    c="blue",
+                    marker="^",
+                    s=200,
+                    label="Camera B Center",
+                    edgecolors="black",
+                    linewidth=2,
+                )
+
+                ax.set_xlabel("X")
+                ax.set_ylabel("Y")
+                ax.set_zlabel("Z")
+                ax.set_title("3D Keypoints and Camera Centers in World Space")
+                ax.legend()
+                plt.tight_layout()
+
+                # Save visualization
+                plt.show(block=True)
 
         (
             NNs_triangulated_points_selected,
