@@ -18,6 +18,8 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 POS_NOISE_SCALES="0.01, 0.1"
 INIT_FRACTIONS="0.5, 0.75"
 
+EXTRA_TAGS="gsplat_version=bfa5e98"
+
 # SfM
 
 ivd_splat_runner --datasets $ALL_DATASETS \
@@ -25,7 +27,8 @@ ivd_splat_runner --datasets $ALL_DATASETS \
     --init_method sfm \
     --output-dir $RESULTS_DIR \
     --configs "strategy={RevDGSStrategy}" \
-    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --extra_tags $EXTRA_TAGS
 
 # Laser Scan
 
@@ -37,6 +40,7 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --configs "strategy={RevDGSStrategy}" \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $INITIAL_NUM_POINTS_PER_SCENE_FILE \
+    --extra_tags $EXTRA_TAGS
 
 ## Fractions of G_max
 ivd_splat_runner --datasets $GT_DATASETS \
@@ -45,7 +49,8 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-    --configs "strategy={RevDGSStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" 
+    --configs "strategy={RevDGSStrategy} dense_init.target_points_fraction={$INIT_FRACTIONS}" \
+    --extra_tags $EXTRA_TAGS
 
 ## Full
 ivd_splat_runner --datasets $GT_DATASETS \
@@ -54,7 +59,8 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-    --configs "strategy={RevDGSStrategy}" 
+    --configs "strategy={RevDGSStrategy}" \
+    --extra_tags $EXTRA_TAGS
 
 ## Noise and half G_max
 ivd_splat_runner --datasets $GT_DATASETS \
@@ -63,7 +69,8 @@ ivd_splat_runner --datasets $GT_DATASETS \
     --output-dir $RESULTS_DIR \
     --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
     --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-    --configs "strategy={RevDGSStrategy} dense_init.target_points_fraction={0.5} init.position_noise_std={$POS_NOISE_SCALES}" 
+    --configs "strategy={RevDGSStrategy} dense_init.target_points_fraction={0.5} init.position_noise_std={$POS_NOISE_SCALES}" \
+    --extra_tags $EXTRA_TAGS
 
 # Gaussian cap fractions with SfM and GT init at same size as SfM.
 GAUSSIAN_CAP_FRACTIONS="0.75 1.25"
@@ -74,7 +81,8 @@ for fract in $GAUSSIAN_CAP_FRACTIONS; do
         --output-dir $RESULTS_DIR \
         --configs "strategy={RevDGSStrategy}" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_fraction=${fract}
+        --gaussian_cap_fraction=${fract} \
+        --extra_tags $EXTRA_TAGS
 
     
     # 3DGS MCMC with various init fractions.
@@ -85,7 +93,8 @@ for fract in $GAUSSIAN_CAP_FRACTIONS; do
         --configs "strategy={RevDGSStrategy} dense_init.target_points_fraction={0.5}" \
         --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
         --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_fraction=${fract}
+        --gaussian_cap_fraction=${fract} \
+        --extra_tags $EXTRA_TAGS
 done
 
 # Monodepth, EDGS, and Laser Scan at same init size as those.
@@ -98,7 +107,8 @@ for init_method in $INIT_METHODS; do
         --configs "strategy={RevDGSStrategy}" \
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --extra_tags $EXTRA_TAGS
     
     if [ "$init_method" == "edgs" ]; then
         ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
@@ -108,7 +118,8 @@ for init_method in $INIT_METHODS; do
             --init_method $init_method \
             --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
             --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-            --init-method-config "full_sh_init=True"
+            --init-method-config "full_sh_init=True" \
+            --extra_tags $EXTRA_TAGS
     fi
 done
 
@@ -121,7 +132,8 @@ for init_method in $INIT_METHODS; do
         --configs "strategy={RevDGSStrategy}" \
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE
+        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        --extra_tags $EXTRA_TAGS
 
     if [ "$init_method" == "edgs" ]; then
         ivd_splat_runner --datasets $OTHER_DATASETS \
@@ -131,6 +143,7 @@ for init_method in $INIT_METHODS; do
             --init_method $init_method \
             --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
             --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
-            --init-method-config "full_sh_init=True"
+            --init-method-config "full_sh_init=True" \
+            --extra_tags $EXTRA_TAGS
     fi
 done
