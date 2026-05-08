@@ -14,6 +14,6 @@ pip install -e .                         \
             git+https://github.com/deivse/NanoGS.git # Using fork for now, can switch to main if PR is merged.
 
 # Need to use the main version for extra_signals rendering feature.
-pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git
+pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@bfa5e98aecc19d3d87a48dfbf97422fef2fa0148
 pip install --no-build-isolation "fused_ssim @ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5" \
             --no-build-isolation third-party/diff-gaussian-rasterization-idhfr/
