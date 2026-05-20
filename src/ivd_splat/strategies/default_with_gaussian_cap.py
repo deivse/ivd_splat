@@ -69,7 +69,7 @@ class DefaultWithGaussianCapStrategy(IVDSplatBaseStrategy):
     }
 
     prune_opa: float = 0.005
-    grow_grad2d: float = 0.0002
+    grow_grad2d: float = 0.0004
     grow_scale3d: float = 0.01
     grow_scale2d: float = 0.05
     prune_scale3d: float = 0.1
