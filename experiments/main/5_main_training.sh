@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=10G
-#SBATCH --partition=amdgpu
+#SBATCH --partition=amdgpuextralong
 #SBATCH --array=0-9
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
