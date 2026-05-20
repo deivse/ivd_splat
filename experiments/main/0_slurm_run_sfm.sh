@@ -17,7 +17,7 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 
 #######################################################################
 
-ivd_splat_runner --datasets $GT_DATASETS \
+ivd_splat_runner --datasets $ALL_DATASETS \
     --method ivd-splat \
     --init_method sfm \
     --output-dir $RESULTS_DIR \
