@@ -37,7 +37,7 @@ def load_final_num_gaussians(
     dir = results_dir.get_method_output_dir(
         scene,
         method,
-        init_method,
+        init_method.value,
         init_method_config_id,
         method_config_id,
     )
