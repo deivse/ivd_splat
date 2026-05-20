@@ -77,7 +77,7 @@ def main() -> None:
             for method in args.init_methods:
                 config_name = config_name_per_method[method]
                 out_dir = results_dir.get_init_method_output_dir(
-                    scene, config_name, method.value
+                    scene, config_name, method
                 )
                 if method == InitMethod.monodepth:
                     points_file = out_dir / MONODEPTH_POINTS_FILE_NAME
