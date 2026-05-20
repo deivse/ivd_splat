@@ -7,3 +7,4 @@ class INRIAStrategy(DefaultWithGaussianCapStrategy):
     """Just a thin wrapper that sets absgrad to False by default, for convenience."""
 
     absgrad = False
+    grow_grad2d = 0.0002
