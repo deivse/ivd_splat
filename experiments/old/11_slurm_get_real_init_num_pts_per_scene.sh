@@ -4,7 +4,7 @@
 #SBATCH --time=1:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --mem-per-cpu=10G
+#SBATCH --mem-per-cpu=2G
 #SBATCH --partition=amdgpufast
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
@@ -17,9 +17,10 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 
 #######################################################################
 
-python get_num_pts_per_scene.py \
+python real_init_get_min_num_pts_per_scene.py \
     --results-dir $RESULTS_DIR \
     --datasets $ALL_DATASETS \
-    --method-config "strategy={DefaultWithGaussianCapStrategy}" \
-    --output $FINAL_NUM_POINTS_PER_SCENE_FILE
+    --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+    --gaussian_cap_fraction 1.0 \
+    --output $REAL_INIT_NUM_POINTS_PER_SCENE_FILE
 

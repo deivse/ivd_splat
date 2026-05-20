@@ -20,6 +20,6 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 python get_num_pts_per_scene.py \
     --results-dir $RESULTS_DIR \
     --datasets $ALL_DATASETS \
-    --method-config "strategy={DefaultWithGaussianCapStrategy}" \
+    --method-config "strategy.grow_grad2d=$ABSGRAD_GRAD_THRESH" \
     --output $FINAL_NUM_POINTS_PER_SCENE_FILE
 
