@@ -35,6 +35,16 @@ function prepend_space_if_set {
     fi
 }
 
+function get_cap_max_param {
+    local cap_max_file=$1
+
+    if [ "$strategy" != "DefaultWithoutADCStrategy" ]; then
+        echo "--gaussian_cap_per_scene_file $cap_max_file"
+    else
+        echo ""
+    fi
+}
+
 
 function train_strat_with_sfm {
     local extra_config=$(prepend_space_if_set "$1")
@@ -44,7 +54,7 @@ function train_strat_with_sfm {
         --init_method sfm \
         --output-dir $RESULTS_DIR \
         --configs "strategy={$strategy}$extra_config" \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        $(get_cap_max_param $FINAL_NUM_POINTS_PER_SCENE_FILE) \
         $EXTRA_TAGS
 }
 
@@ -57,7 +67,7 @@ function train_strat_with_laser_scan {
         --init_method laser_scan \
         --output-dir $RESULTS_DIR \
         --configs "strategy={$strategy}$extra_config" \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        $(get_cap_max_param $FINAL_NUM_POINTS_PER_SCENE_FILE) \
         --init_size_per_scene_file $init_size_per_scene_file \
         $EXTRA_TAGS
 }
@@ -72,7 +82,7 @@ function train_strat_with_cap_fraction {
         --init_method $init_method \
         --output-dir $RESULTS_DIR \
         --configs "strategy={$strategy}$extra_config" \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        $(get_cap_max_param $FINAL_NUM_POINTS_PER_SCENE_FILE) \
         --init_size_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
         --gaussian_cap_fraction=${fract} \
         $EXTRA_TAGS
@@ -90,7 +100,7 @@ function train_strat_with_practical_init_method {
         --configs "strategy={$strategy}" \
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
-        --gaussian_cap_per_scene_file $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        $(get_cap_max_param $FINAL_NUM_POINTS_PER_SCENE_FILE) \
         --init-method-config $init_method_config \
         $EXTRA_TAGS
 }
