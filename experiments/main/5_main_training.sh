@@ -94,7 +94,7 @@ function train_strat_with_practical_init_method {
     # default to "default" if not set
     local init_method_config="${3:-default}"
 
-    ivd_splat_runner --datasets $GT_DATASETS_EXCEPT_ETH3D \
+    ivd_splat_runner --datasets $datasets \
         --method ivd-splat \
         --output-dir $RESULTS_DIR \
         --configs "strategy={$strategy}" \
@@ -148,11 +148,11 @@ for strategy in $ALL_STRATEGIES; do
     INIT_METHODS="monodepth edgs laser_scan"
 
     for init_method in $INIT_METHODS; do
-        train_strat_with_practical_init_method $init_method $ALL_DATASETS_EXCEPT_ETH3D
+        train_strat_with_practical_init_method $init_method "$ALL_DATASETS_EXCEPT_ETH3D"
         
         # EDGS with full SH init (disabled for now)
         # if [ "$init_method" == "edgs" ]; then
-        #     train_strat_with_practical_init_method $init_method $ALL_DATASETS_EXCEPT_ETH3D "full_sh_init=True"
+        #     train_strat_with_practical_init_method $init_method "$ALL_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
         # fi
     done
 
@@ -160,11 +160,11 @@ for strategy in $ALL_STRATEGIES; do
     INIT_METHODS="monodepth edgs"
 
     for init_method in $INIT_METHODS; do
-        train_strat_with_practical_init_method $init_method $OTHER_DATASETS
+        train_strat_with_practical_init_method $init_method "$OTHER_DATASETS"
         
         # EDGS with full SH init (disabled for now)
         # if [ "$init_method" == "edgs" ]; then
-        #     train_strat_with_practical_init_method $init_method $OTHER_DATASETS "full_sh_init=True"
+        #     train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "full_sh_init=True"
         # fi
     done
 done
