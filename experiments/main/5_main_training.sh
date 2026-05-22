@@ -148,11 +148,11 @@ for strategy in $ALL_STRATEGIES; do
     INIT_METHODS="monodepth edgs laser_scan"
 
     for init_method in $INIT_METHODS; do
-        train_strat_with_practical_init_method $init_method "$ALL_DATASETS_EXCEPT_ETH3D"
+        train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D"
         
         # EDGS with full SH init (disabled for now)
         # if [ "$init_method" == "edgs" ]; then
-        #     train_strat_with_practical_init_method $init_method "$ALL_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
+        #     train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
         # fi
     done
 
