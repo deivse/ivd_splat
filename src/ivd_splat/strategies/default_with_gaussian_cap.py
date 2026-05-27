@@ -190,7 +190,7 @@ class DefaultWithGaussianCapStrategy(IVDSplatBaseStrategy):
                 state["radii"].zero_()
             torch.cuda.empty_cache()
 
-        if step % self.reset_every == 0 & step > 0:
+        if step % self.reset_every == 0 and step > 0:
             reset_opa(
                 params=params,
                 optimizers=optimizers,

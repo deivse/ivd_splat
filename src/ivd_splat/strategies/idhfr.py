@@ -232,9 +232,9 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
         args: IVDSplatBaseStrategy.StepPreBackwardArgs,
     ):
         """Callback function to be executed before the `loss.backward()` call."""
-        assert (
-            self.key_for_gradient in args.info
-        ), "The 2D means of the Gaussians is required but missing."
+        assert self.key_for_gradient in args.info, (
+            "The 2D means of the Gaussians is required but missing."
+        )
         args.info[self.key_for_gradient].retain_grad()
 
     def step_post_backward(
@@ -297,7 +297,7 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
                 state["radii"].zero_()
             torch.cuda.empty_cache()
 
-        if step % self.reset_every == 0 & step > 0:
+        if step % self.reset_every == 0 and step > 0:
             reset_opa(
                 params=params,
                 optimizers=optimizers,
@@ -358,9 +358,9 @@ class IDHFRStrategy(IVDSplatBaseStrategy):
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
-        assert (
-            state["grad2d"].shape[0] == n_gaussian
-        ), "State grad2d has incorrect shape."
+        assert state["grad2d"].shape[0] == n_gaussian, (
+            "State grad2d has incorrect shape."
+        )
 
         # update the running state
         if packed:
