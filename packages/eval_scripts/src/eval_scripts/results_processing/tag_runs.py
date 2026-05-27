@@ -183,6 +183,7 @@ def filter_and_tag_runs(
         & df["gaussian_cap_fraction"].eq("1.0")
     )
     tag(df, is_sfm_baseline, "init_group", "sfm_baseline")
+    tag(df, ~is_sfm_baseline, "init_group", "None")
     runs.df = df
 
     return runs
