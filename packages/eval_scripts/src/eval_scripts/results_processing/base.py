@@ -246,7 +246,7 @@ def get_common_scenes(
 
 
 def drop_scenes_not_present_in_all(
-    *per_scene_data: pd.DataFrame,
+    *per_scene_data: pd.DataFrame, debug_out: bool = True
 ) -> tuple[set[str], set[str]]:
     """
     Drops data for scenes that are not present in all provided dataframes.
@@ -266,7 +266,8 @@ def drop_scenes_not_present_in_all(
         )
         raise ValueError("No common scenes found across runs.")
 
-    print(f"Common scenes ({len(common_scenes)}): " + ", ".join(common_scenes))
+    if debug_out:
+        print(f"Common scenes ({len(common_scenes)}): " + ", ".join(common_scenes))
 
     # in-place filtering of each dataframe to only include common scenes
     for data in per_scene_data:
@@ -317,7 +318,7 @@ def _get_full_runs_list(
 
 def load_runs(
     query: str | None = None,
-    experiment_name: str = "gt_pointclouds",
+    experiment_name: str = "main",
     tracking_uri: str = "http://localhost:6069",
     finished_run_step: int = MAX_STEPS,
     finished_only: bool = True,
