@@ -189,6 +189,9 @@ class Config(SerializableConfig):
     # Scale regularization
     scale_reg: float = 0.0
 
+    # Random seed for reproducibility. (Though non-deterministic CUDA ops will still introduce some randomness)
+    random_seed: int = 42
+
     # Means initial learning rate
     means_lr_init: float = 1.6e-4
     # Means final learning rate
