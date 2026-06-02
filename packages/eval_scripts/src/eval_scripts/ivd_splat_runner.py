@@ -49,6 +49,9 @@ class IVDRunnerArguments:
         default_factory=lambda: ["train"]
     )
 
+    # Training iteration, determines random seed and is added to the parameters.
+    eval_iter: int = 0
+
     # MLflow experiment name. If not set and MLFLOW_EXPERIMENT_NAME env var not set, defaults to "Default".
     mlflow_experiment: typing.Optional[str] = None
     # Nerfbaselines method identifier, nothing except ivd-splat is really supported at the moment.
@@ -374,6 +377,11 @@ def process_combination(
                 ),
             )
         )
+    if args.eval_iter != 0:
+        args.extra_tags.append(f"eval_iter={args.eval_iter}")
+        config = config.with_prepended_params(
+            (("random_seed", str(42 * (args.eval_iter + 1))),)
+        )
 
     nerfbaselines_data_val, initialization_params = (
         get_data_and_config_overrides_for_init_method(
@@ -449,6 +457,7 @@ def process_combination(
             mlflow.log_param("init_method", init_method)
             mlflow.log_param("init_method_config", args.init_method_config)
             mlflow.log_param("gaussian_cap_fraction", args.gaussian_cap_fraction)
+            mlflow.log_param("eval_iter", args.eval_iter)
             for param in args.extra_tags:
                 try:
                     name, value = param.split("=")
