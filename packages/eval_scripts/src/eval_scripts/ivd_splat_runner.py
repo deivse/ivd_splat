@@ -377,11 +377,6 @@ def process_combination(
                 ),
             )
         )
-    if args.eval_iter != 0:
-        args.extra_tags.append(f"eval_iter={args.eval_iter}")
-        config = config.with_prepended_params(
-            (("random_seed", str(42 * (args.eval_iter + 1))),)
-        )
 
     nerfbaselines_data_val, initialization_params = (
         get_data_and_config_overrides_for_init_method(
@@ -544,8 +539,16 @@ def main():
         sep="\n",
     )
 
+    if args.eval_iter != 0:
+        args.extra_tags.append(f"eval_iter={args.eval_iter}")
+
     for scene, config in combinations:
         try:
+            if args.eval_iter != 0:
+                config = config.with_prepended_params(
+                    (("random_seed", str(42 * (args.eval_iter + 1))),)
+                )
+
             process_combination(
                 scene,
                 args.init_method,
