@@ -536,7 +536,7 @@ def main():
         "\tConfigs: "
         + ANSIEscapes.format(
             "\n\t          ".join(
-                c.make_config_name(CONFIG_STR_PARAM_RENAMES, extra_tags)
+                c.make_config_name(CONFIG_STR_PARAM_RENAMES, args.extra_tags)
                 for c in configs
             ),
             "cyan",
