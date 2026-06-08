@@ -377,8 +377,10 @@ def process_combination(
                 ),
             )
         )
+
+    extra_tags = args.extra_tags.copy()
     if args.eval_iter != 0:
-        args.extra_tags.append(f"eval_iter={args.eval_iter}")
+        extra_tags.append(f"eval_iter={args.eval_iter}")
         config = config.with_prepended_params(
             (("random_seed", str(42 * (args.eval_iter + 1))),)
         )
@@ -396,7 +398,7 @@ def process_combination(
     # because it's already in the output dir structure through init_method
     config_name = config.make_config_name(
         CONFIG_STR_PARAM_RENAMES,
-        args.extra_tags + init_params_included_in_name,
+        extra_tags + init_params_included_in_name,
     )
     config = config.with_prepended_params(initialization_params)
 
@@ -458,7 +460,7 @@ def process_combination(
             mlflow.log_param("init_method_config", args.init_method_config)
             mlflow.log_param("gaussian_cap_fraction", args.gaussian_cap_fraction)
             mlflow.log_param("eval_iter", args.eval_iter)
-            for param in args.extra_tags:
+            for param in extra_tags:
                 try:
                     name, value = param.split("=")
                     mlflow.log_param(name.strip(), value.strip())
@@ -534,7 +536,7 @@ def main():
         "\tConfigs: "
         + ANSIEscapes.format(
             "\n\t          ".join(
-                c.make_config_name(CONFIG_STR_PARAM_RENAMES, args.extra_tags)
+                c.make_config_name(CONFIG_STR_PARAM_RENAMES, extra_tags)
                 for c in configs
             ),
             "cyan",
