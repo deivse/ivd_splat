@@ -1,12 +1,11 @@
 from typing import Iterable, Literal
-import typing
 
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 import numpy as np
 import pandas as pd
 
-from .base import METRIC_PRETTY_NAMES, TABLE_METRICS
+from results_scripts.constants import METRIC_PRETTY_NAMES, DEFAULT_TABLE_METRICS
 
 
 def format_number_compactly(val: float):
@@ -31,7 +30,7 @@ def per_metric_barplots_for_each_config(
     columns: int = 2,
     figsize=(12, 8),
     cmap: plt.Colormap = plt.cm.Set2,  # type: ignore
-    metrics_to_plot: list[str] = TABLE_METRICS,
+    metrics_to_plot: list[str] = DEFAULT_TABLE_METRICS,
     metric_pretty_names: dict[str, str] = METRIC_PRETTY_NAMES,
     plot_limits_per_metric: dict[str, tuple[float, float]] = {},
     label_bars: bool = True,
@@ -155,7 +154,7 @@ def grouped_per_metric_barplots_for_each_config(
     additional_data: dict[str, pd.DataFrame] = {},
     figsize=(8, 8),
     colors=plt.cm.tab10.colors,  # type: ignore
-    metrics_to_plot: list[str] = TABLE_METRICS,
+    metrics_to_plot: list[str] = DEFAULT_TABLE_METRICS,
     metric_pretty_names: dict[str, str] = METRIC_PRETTY_NAMES,
     columns: int = 2,
     label_all_bars: bool = False,
@@ -409,7 +408,7 @@ def grouped_per_metric_barplots_for_each_config(
 def grouped_per_metric_line_charts_for_each_config(
     data: dict[str, dict[float, pd.DataFrame]],
     extra_data_lines: dict[str, pd.DataFrame] = {},
-    metrics_to_plot: list[str] = TABLE_METRICS,
+    metrics_to_plot: list[str] = DEFAULT_TABLE_METRICS,
     metric_pretty_names: dict[str, str] = METRIC_PRETTY_NAMES,
     columns: int = 2,
     plot_limits_per_metric: dict[str, tuple[float, float]] = {},
