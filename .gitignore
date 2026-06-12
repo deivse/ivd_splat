@@ -12,4 +12,7 @@ random_leftover_stuff/
 mlruns/
 tmp/
 results_scripts/graphs/
+results_scripts/cache/
+results_scripts/tables/
 personal/
+*.egg-info

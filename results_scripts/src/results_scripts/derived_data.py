@@ -1,4 +1,4 @@
-from eval_scripts.results_processing.base import TABLE_METRICS
+from results_scripts.base import DEFAULT_TABLE_METRICS
 import pandas as pd
 
 
@@ -39,7 +39,7 @@ def add_metrics_per_x_gaussians(
 
 
 def get_metrics_as_fraction_of_sfm(
-    sfm: pd.DataFrame, *other_data: pd.DataFrame, metrics=TABLE_METRICS
+    sfm: pd.DataFrame, *other_data: pd.DataFrame, metrics=DEFAULT_TABLE_METRICS
 ) -> list[pd.DataFrame]:
     """
     For each metric, divides the values in the other_data dataframes by the corresponding value in the sfm dataframe, to get a percentage of sfm performance.

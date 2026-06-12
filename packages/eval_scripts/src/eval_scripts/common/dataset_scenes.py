@@ -97,8 +97,6 @@ SCENES_PER_DATASET = {
     ]
 }
 
-print(SCENES_PER_DATASET)  # For debugging
-
 
 def scene_id_to_nerfbaselines_data_value(scene: str | Path) -> str:
     scene = str(scene)
