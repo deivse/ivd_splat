@@ -12,21 +12,41 @@ def tabular_colored_from_numeric_with_custom_text(
     text_table: pd.DataFrame,
     range_mode: Literal["default", "centered"] = "default",
     hide_nulls: bool = True,
+    column_format: str | None = None,
+    header_block: str | None = None,
+    color_range: tuple[float, float] | None = None,
 ):
+    """Render ``table`` as a colored LaTeX ``tabular`` using ``text_table`` cell text.
+
+    column_format: overrides the default ``l`` + ``c`` * ncols column spec (e.g.
+        ``"l|ccc|ccc"`` for grouped columns).
+    header_block: if given, fully replaces the auto-generated single header row
+        (the row beginning with ``&``). Use this to provide a multi-row header
+        with ``\\multicolumn`` groups. The trailing ``\\\\`` must be included.
+        When provided, ``top_left_label`` is ignored.
+    color_range: if given, an explicit ``(vmin, vmax)`` for the gradient, used
+        verbatim (no padding) and overriding ``range_mode``. Use this to share an
+        identical color scale across multiple tables rendered separately.
+    """
     numeric_table = table.apply(pd.to_numeric, errors="coerce")
     # TODO: make this global across datasets??? or no?
-    if range_mode == "default":
+    if color_range is not None:
+        vmin, vmax = color_range
+    elif range_mode == "default":
         vmin = numeric_table.min().min()
         vmax = numeric_table.max().max()
+        pad = (vmax - vmin) * 0.1 if pd.notna(vmin) and pd.notna(vmax) else 0.0
+        vmin -= pad
+        vmax += pad
     elif range_mode == "centered":
         max_abs = numeric_table.abs().max().max()
         vmin = -max_abs
         vmax = max_abs
+        pad = (vmax - vmin) * 0.1 if pd.notna(vmin) and pd.notna(vmax) else 0.0
+        vmin -= pad
+        vmax += pad
     else:
         raise ValueError(f"Invalid range_mode: {range_mode}")
-    pad = (vmax - vmin) * 0.1 if pd.notna(vmin) and pd.notna(vmax) else 0.0
-    vmin -= pad
-    vmax += pad
 
     styled_table = numeric_table.style.background_gradient(
         cmap="coolwarm", axis=None, vmin=vmin, vmax=vmax
@@ -47,22 +67,33 @@ def tabular_colored_from_numeric_with_custom_text(
     latex_str = styled_table.to_latex(
         convert_css=True,
         hrules=True,
-        column_format="l" + "c" * len(table.columns),
+        column_format=column_format or ("l" + "c" * len(table.columns)),
     )
     lines = latex_str.splitlines()
     start = next(i for i, ln in enumerate(lines) if r"\begin{tabular}" in ln)
     end = next(i for i, ln in enumerate(lines) if r"\end{tabular}" in ln)
     tabular_only = "\n".join(lines[start : end + 1])
 
-    # start of row with space and &
-    regex = r"^(\s*)&(.*)$"
-    tabular_only = re.sub(
-        regex,
-        lambda m: f"{m.group(1)}{top_left_label} &{m.group(2)}",
-        tabular_only,
-        count=1,
-        flags=re.MULTILINE,
-    )
+    # The Styler emits a single header row beginning with ``&``. Body rows start
+    # with their index label, so the regex only matches that header row.
+    header_regex = r"^(\s*)&(.*)$"
+    if header_block is not None:
+        # Lambda replacement avoids re.sub backslash-escaping of the LaTeX text.
+        tabular_only = re.sub(
+            header_regex,
+            lambda _m: header_block,
+            tabular_only,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        tabular_only = re.sub(
+            header_regex,
+            lambda m: f"{m.group(1)}{top_left_label} &{m.group(2)}",
+            tabular_only,
+            count=1,
+            flags=re.MULTILINE,
+        )
 
     return tabular_only
 

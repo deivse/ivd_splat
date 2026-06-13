@@ -39,9 +39,9 @@ DEFAULT_MEANS_LR_INIT = 0.00016
 
 STRATEGY_NAMES = {
     "DefaultWithGaussianCapStrategy": "AbsGS",
+    "INRIAStrategy": "INRIA",
     "MCMCStrategy": "MCMC",
     "IDHFRStrategy": "IDHFR",
-    "INRIAStrategy": "INRIA",
     "RevDGSStrategy": "RevDGS",
     "DefaultWithoutADCStrategy": "No D.",
 }
@@ -98,23 +98,6 @@ DATASET_NAMES = {
     "mipnerf360": "Mip-NeRF 360",
     "tanksandtemples": "Tanks and Temples",
 }
-
-MAIN_GRAPH_STRATEGIES = [
-    "DefaultWithGaussianCapStrategy",
-    "INRIAStrategy",
-    "MCMCStrategy",
-    "IDHFRStrategy",
-    "RevDGSStrategy",
-    "DefaultWithoutADCStrategy",
-]
-
-BASE_GT_STRATEGIES = [
-    "DefaultWithGaussianCapStrategy",
-    "MCMCStrategy",
-    "IDHFRStrategy",
-    "INRIAStrategy",
-    "RevDGSStrategy",
-]
 
 DEFAULT_TABLE_METRICS = [
     f"eval-all-test/{metric}" for metric in ["psnr", "ssim", "lpips"]
