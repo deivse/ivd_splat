@@ -65,6 +65,7 @@ def save_figure_svg(
     output: Path,
     **kwargs,
 ):
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     kwargs.setdefault("bbox_inches", "tight")
     fig.savefig(output, format="svg", **kwargs)

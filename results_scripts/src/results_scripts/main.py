@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal, cast
 
+from eval_scripts.common.ansi_escapes import ANSIEscapes, ansiesc_print
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -28,14 +29,14 @@ import tyro
 from results_scripts.constants import (
     ALL_DATASETS,
     ALL_DATASETS_WITHOUT_ETH3D,
-    BASE_GT_STRATEGIES,
+    ALL_STRATEGIES,
+    ALL_STRATEGIES_EXCEPT_NO_D,
     DATASET_NAMES,
     DENSE_INIT_METRICS,
     GT_DATASETS,
     GT_DATASETS_WITHOUT_ETH3D,
     INIT_METHOD_COLORS,
     LINE_CHART_PLOT_STARTS,
-    MAIN_GRAPH_STRATEGIES,
     METRIC_NAME_MAP,
     PLOT_RANGES_PER_METRIC,
     REAL_INIT_PLOT_STARTS,
@@ -147,7 +148,7 @@ class ResultsContext:
         return ResultsContext(
             workdir=workdir,
             tracking_uri=args.tracking_uri,
-            output_helper=OutputDirHelper(workdir / output_dir),
+            output_helper=OutputDirHelper(output_dir),
             num_pts_per_scene=num_pts_per_scene,
             sfm_init_num_pts_per_scene=sfm_init_num_pts_per_scene,
             real_init_num_pts_per_scene=real_init_num_pts_per_scene,
@@ -275,11 +276,6 @@ def laser_scan_graphs(ctx: ResultsContext, latex_options: FormatOptions) -> None
         "gaussian_cap_fraction": "1.0",
     }
     section_subdir = "gt_init_diff_strategies_and_sizes/main"
-    strategies_without_no_d = [
-        strategy
-        for strategy in MAIN_GRAPH_STRATEGIES
-        if strategy != "DefaultWithoutADCStrategy"
-    ]
 
     for dataset in GT_DATASETS:
         print("Dataset:", dataset)
@@ -288,7 +284,7 @@ def laser_scan_graphs(ctx: ResultsContext, latex_options: FormatOptions) -> None
         data: dict[str, dict[str | float, pd.DataFrame]] = {}
         sfm_data: dict[str, pd.DataFrame] = {}
 
-        for strategy in strategies_without_no_d:
+        for strategy in ALL_STRATEGIES_EXCEPT_NO_D:
             sfm_data[strategy] = runs.get_per_scene_metrics_for_params(
                 {
                     "init_group": "sfm_baseline",
@@ -296,7 +292,7 @@ def laser_scan_graphs(ctx: ResultsContext, latex_options: FormatOptions) -> None
                 }
             )
 
-        for strategy in strategies_without_no_d:
+        for strategy in ALL_STRATEGIES_EXCEPT_NO_D:
             args = {
                 **common_args,
                 "strategy": strategy,
@@ -308,7 +304,7 @@ def laser_scan_graphs(ctx: ResultsContext, latex_options: FormatOptions) -> None
             )
             data.setdefault(STRATEGY_NAMES[strategy], {})["as_sfm"] = result
 
-        for strategy in MAIN_GRAPH_STRATEGIES:
+        for strategy in ALL_STRATEGIES:
             for size_fraction in ["0.5", "0.75", "1.0"]:
                 args = {
                     **common_args,
@@ -427,7 +423,7 @@ def laser_scan_tables(ctx: ResultsContext, format_options: FormatOptions) -> Non
 
         data: dict[str, dict[str, pd.DataFrame]] = {}
 
-        for strategy in BASE_GT_STRATEGIES:
+        for strategy in ALL_STRATEGIES_EXCEPT_NO_D:
             data.setdefault(STRATEGY_NAMES[strategy], {})["sfm"] = (
                 runs.get_per_scene_metrics_for_params(
                     {
@@ -436,19 +432,17 @@ def laser_scan_tables(ctx: ResultsContext, format_options: FormatOptions) -> Non
                     }
                 )
             )
-
-        for strategy in BASE_GT_STRATEGIES:
-            args = {
-                **common_args,
-                "strategy": strategy,
-                "init_method": "laser_scan",
-                "init_size_matches_sfm": True,
-            }
-            result = runs.get_per_scene_metrics_for_params(
-                args,
-                metrics=DENSE_INIT_METRICS,
+            data.setdefault(STRATEGY_NAMES[strategy], {})["as_sfm"] = (
+                runs.get_per_scene_metrics_for_params(
+                    {
+                        **common_args,
+                        "strategy": strategy,
+                        "init_method": "laser_scan",
+                        "init_size_matches_sfm": True,
+                    },
+                    metrics=DENSE_INIT_METRICS,
+                )
             )
-            data.setdefault(STRATEGY_NAMES[strategy], {})["as_sfm"] = result
 
         for strategy in [
             "DefaultWithGaussianCapStrategy",
@@ -492,13 +486,15 @@ def laser_scan_tables(ctx: ResultsContext, format_options: FormatOptions) -> Non
             format_args=format_options,
         )
 
-    path = ctx.output_helper.get_table_path("laser_scan.tex")
+    path = ctx.output_helper.get_table_path("laser_scan")
     write_file(path, join_per_dataset_tables_with_latex_comments(tables))
     print(f"Saved main Laser Scan table to {path}")
 
 
 def dense_improvement_tables(
-    ctx: ResultsContext, format_options: FormatOptions
+    ctx: ResultsContext,
+    format_options: FormatOptions,
+    stack_init_methods: bool = False,
 ) -> None:
     common_args = {
         "is_default_strategy_config": True,
@@ -506,198 +502,205 @@ def dense_improvement_tables(
         "gaussian_cap_fraction": "1.0",
     }
 
+    metrics = [
+        "eval-all-test/psnr",
+        "eval-all-test/ssim",
+        "eval-all-test/lpips",
+    ]
+    strat_names = [STRATEGY_NAMES[strategy] for strategy in ALL_STRATEGIES_EXCEPT_NO_D]
+    init_methods = ["laser", "monodepth"]
+
+    def col_id(init: str, metric: str) -> str:
+        return f"{init}_{metric}"
+
+    columns = [col_id(init, metric) for init in init_methods for metric in metrics]
+
+    metric_headers = " & ".join(
+        rf"\textbf{{{label}}}"
+        for label in (
+            r"$\Delta$PSNR $\uparrow$",
+            r"$\Delta$SSIM $\uparrow$",
+            r"$\Delta$LPIPS $\downarrow$",
+        )
+    )
+    init_labels = {
+        "laser": r"$0.75G_\mathit{max}$ Laser",
+        "monodepth": "Monodepth",
+    }
+    # Side-by-side header: two metric groups under a \multicolumn per init method.
+    side_by_side_header = (
+        r"& \multicolumn{3}{c|}{" + init_labels["laser"] + r"} "
+        r"& \multicolumn{3}{c}{" + init_labels["monodepth"] + r"} \\"
+        "\n"
+        rf"\textbf{{Strategy}} & {metric_headers} & {metric_headers} \\"
+    )
+
+    format_cell = make_cell_formatter(
+        format_options.table_cell_type,
+        rounding_per_metric=TABLE_ROUNDING_PER_METRIC,
+    )
+
     tables_per_dataset: dict[str, str] = {}
     for dataset in GT_DATASETS_WITHOUT_ETH3D:
         runs = ctx.runs_per_dataset[dataset].copy()
 
         sfm_data: dict[str, pd.DataFrame] = {}
-        laser_data: dict[str, dict[str, pd.DataFrame]] = {}
-        monodepth_data: dict[str, dict[str, pd.DataFrame]] = {}
-
-        for strategy in BASE_GT_STRATEGIES:
-            sfm_data[STRATEGY_NAMES[strategy]] = runs.get_per_scene_metrics_for_params(
-                {
-                    "init_group": "sfm_baseline",
-                    "strategy": strategy,
-                }
+        improvement_data: dict[str, dict[str, pd.DataFrame]] = {
+            init: {} for init in init_methods
+        }
+        for strategy in ALL_STRATEGIES_EXCEPT_NO_D:
+            strat_name = STRATEGY_NAMES[strategy]
+            sfm_data[strat_name] = runs.get_per_scene_metrics_for_params(
+                {"init_group": "sfm_baseline", "strategy": strategy}
             )
-
-        for strategy in BASE_GT_STRATEGIES:
-            size_fraction = "0.75"
-            laser_args = {
-                **common_args,
-                "strategy": strategy,
-                "dense_init.target_points_fraction": size_fraction,
-                "init_method": "laser_scan",
-                "init_size_matches_gmax": True,
-            }
-            laser_data.setdefault(STRATEGY_NAMES[strategy], {})[size_fraction] = (
+            improvement_data["laser"][strat_name] = (
                 runs.get_per_scene_metrics_for_params(
-                    laser_args,
+                    {
+                        **common_args,
+                        "strategy": strategy,
+                        "dense_init.target_points_fraction": "0.75",
+                        "init_method": "laser_scan",
+                        "init_size_matches_gmax": True,
+                    },
                     metrics=DENSE_INIT_METRICS,
                 )
             )
-
-            monodepth_args = {
-                **common_args,
-                "strategy": strategy,
-                "init_method": "monodepth",
-            }
-            monodepth_data.setdefault(STRATEGY_NAMES[strategy], {})["monodepth"] = (
+            improvement_data["monodepth"][strat_name] = (
                 runs.get_per_scene_metrics_for_params(
-                    monodepth_args,
+                    {
+                        **common_args,
+                        "strategy": strategy,
+                        "init_method": "monodepth",
+                    },
                     metrics=DEFAULT_TABLE_METRICS,
                 )
             )
 
-        all_dfs = [*sfm_data.values()]
-        all_dfs += [df for values in laser_data.values() for df in values.values()]
-        all_dfs += [df for values in monodepth_data.values() for df in values.values()]
-        drop_scenes_not_present_in_all(*all_dfs, debug_out=True)
-
-        def make_col_id(init, metric):
-            return f"{init}_{metric}"
-
-        format_cell = make_cell_formatter(
-            format_options.table_cell_type,
-            rounding_per_metric=TABLE_ROUNDING_PER_METRIC,
+        drop_scenes_not_present_in_all(
+            *sfm_data.values(),
+            *(
+                df
+                for per_strat in improvement_data.values()
+                for df in per_strat.values()
+            ),
+            debug_out=True,
         )
 
-        metrics = [
-            "eval-all-test/psnr",
-            "eval-all-test/ssim",
-            "eval-all-test/lpips",
-        ]
-
-        # TODO: rewrite this so it stacks the sections for the two init methods above each other instead of horizontally
-        table = pd.DataFrame(
-            columns=[
-                make_col_id(key, metric)
-                for key in ["laser", "monodepth"]
-                for metric in metrics
-            ],
-            index=["AbsGS", "INRIA", "MCMC", "IDHFR", "RevDGS"],
-        )
-        text_table = pd.DataFrame(
-            columns=[
-                make_col_id(key, metric)
-                for key in ["laser", "monodepth"]
-                for metric in metrics
-            ],
-            index=["AbsGS", "INRIA", "MCMC", "IDHFR", "RevDGS"],
-        )
+        # color_table drives the background gradient, text_table the cell text.
+        color_table = pd.DataFrame(index=strat_names, columns=columns, dtype=float)
+        text_table = pd.DataFrame(index=strat_names, columns=columns, dtype=object)
 
         for metric in metrics:
-            max_improvement = 0.0
+            # LPIPS is lower-is-better: flip its sign so positive == improvement
+            # (warm color) consistently with the other metrics.
+            multiplier = -1.0 if metric.lower().endswith("lpips") else 1.0
+            rounding = TABLE_ROUNDING_PER_METRIC[metric]
+            cell_means: dict[tuple[str, str], float] = {}
+            metric_max_abs = 0.0
 
-            for strat_name in table.index:
-                laser_df = laser_data[strat_name]["0.75"]
-                monodepth_df = monodepth_data[strat_name]["monodepth"]
-                sfm_df = sfm_data[strat_name]
+            for init in init_methods:
+                for strat_name in strat_names:
+                    improvement = (
+                        improvement_data[init][strat_name][metric]
+                        - sfm_data[strat_name][metric]
+                    )
+                    cell = CellData.for_metric(improvement.to_frame(), metric)
+                    rounded_mean = round(cell.mean, rounding)
+                    cell_means[(init, strat_name)] = rounded_mean
+                    metric_max_abs = max(metric_max_abs, abs(rounded_mean))
+                    text_table.loc[strat_name, col_id(init, metric)] = format_cell(cell)
 
-                laser_improvement = laser_df[metric] - sfm_df[metric]
-                monodepth_improvement = monodepth_df[metric] - sfm_df[metric]
-                multiplier = -1.0 if metric.lower().endswith("lpips") else 1.0
+            # Normalize colors per metric across both init methods. This keeps the
+            # coloring scale consistent across metrics (which differ in magnitude)
+            # and identical between the two init-method column groups, so colors
+            # remain comparable across the laser/monodepth tables.
+            for (init, strat_name), mean in cell_means.items():
+                normalized = (
+                    multiplier * mean / metric_max_abs if metric_max_abs else 0.0
+                )
+                color_table.loc[strat_name, col_id(init, metric)] = normalized
 
-                cd_laser_improvement = CellData.for_metric(
-                    laser_improvement.to_frame(), metric
-                )
-                cd_monodepth_improvement = CellData.for_metric(
-                    monodepth_improvement.to_frame(), metric
-                )
-                max_improvement = max(
-                    max_improvement,
-                    abs(cd_laser_improvement.mean),
-                    abs(cd_monodepth_improvement.mean),
+        # Explicit shared color range (matches the helper's "centered" range with
+        # padding), so the stacked sub-tables use an identical scale instead of
+        # each recomputing its own from only one init method's values.
+        max_abs = float(color_table.abs().max().max())
+        color_range = (-1.2 * max_abs, 1.2 * max_abs)
+
+        def wrap_resize(tabular: str) -> str:
+            if not format_options.resize_to_column:
+                return tabular
+            return tabular.replace(
+                r"\begin{tabular}", r"\resizebox{\columnwidth}{!}{\begin{tabular}"
+            ).replace(r"\end{tabular}", r"\end{tabular}}")
+
+        if stack_init_methods:
+            # Stack the two init methods as sections of a SINGLE tabular, so the
+            # column widths stay aligned (separate tabulars + \resizebox would
+            # each scale independently and misalign).
+            section_tabulars: list[str] = []
+            for init in init_methods:
+                init_cols = [col_id(init, metric) for metric in metrics]
+                sub_color = color_table[init_cols].set_axis(metrics, axis=1)
+                sub_text = text_table[init_cols].set_axis(metrics, axis=1)
+                section_tabulars.append(
+                    tabular_colored_from_numeric_with_custom_text(
+                        top_left_label="",
+                        table=sub_color,
+                        text_table=sub_text,
+                        hide_nulls=False,
+                        column_format="l|ccc",
+                        header_block=(
+                            rf"\textbf{{{init_labels[init]}}} & {metric_headers} \\"
+                        ),
+                        color_range=color_range,
+                    )
                 )
 
-                table.loc[strat_name, make_col_id("laser", metric)] = round(
-                    multiplier * cd_laser_improvement.mean,
-                    TABLE_ROUNDING_PER_METRIC[metric],
+            first_lines = section_tabulars[0].splitlines()
+            # First section: keep everything up to (but excluding) its \bottomrule.
+            bottom_idx = next(
+                i for i, ln in enumerate(first_lines) if r"\bottomrule" in ln
+            )
+            combined_lines = first_lines[:bottom_idx]
+            # Subsequent sections: splice in everything after their \toprule
+            # (header row + \midrule + body + \bottomrule + \end{tabular}),
+            # separated from the previous section by a \midrule.
+            for section in section_tabulars[1:]:
+                lines = section.splitlines()
+                top_idx = next(
+                    i for i, ln in enumerate(lines) if r"\toprule" in ln
                 )
-                table.loc[strat_name, make_col_id("monodepth", metric)] = round(
-                    multiplier * cd_monodepth_improvement.mean,
-                    TABLE_ROUNDING_PER_METRIC[metric],
+                combined_lines.append(r"\midrule")
+                combined_lines.extend(lines[top_idx + 1 :])
+            tabular = wrap_resize("\n".join(combined_lines))
+        else:
+            tabular = wrap_resize(
+                tabular_colored_from_numeric_with_custom_text(
+                    top_left_label="",
+                    table=color_table,
+                    text_table=text_table,
+                    hide_nulls=False,
+                    column_format="l|ccc|ccc",
+                    header_block=side_by_side_header,
+                    color_range=color_range,
                 )
-                text_table.loc[strat_name, make_col_id("laser", metric)] = format_cell(
-                    cd_laser_improvement
-                )
-                text_table.loc[strat_name, make_col_id("monodepth", metric)] = (
-                    format_cell(cd_monodepth_improvement)
-                )
-
-            # We divide by metric max, so value-based coloring is consistent for all metrics regardless of their scale.
-            # The max improvement is computed across all strategies and init methods for this metric and dataset
-            for strat_name in table.index:
-                for init in ["laser", "monodepth"]:
-                    col_id = make_col_id(init, metric)
-                    if max_improvement > 0:
-                        table.loc[strat_name, col_id] /= max_improvement
-
-        tabular = tabular_colored_from_numeric_with_custom_text(
-            "<header_row_placeholder>",
-            table,
-            text_table,
-            range_mode="centered",
-            hide_nulls=False,
-        )
+            )
 
         output_lines = [
             r"\begin{table}[t]",
             r"\centering",
             rf"\caption{{Improvement from dense initialization over SfM init on {DATASET_NAMES.get(dataset, dataset)}.}}",
             rf"\label{{tab:{dataset}_dense_improvement}}",
-        ]
-
-        header_start = (
-            r""
-            if not format_options.resize_to_column
-            else r"\resizebox{\columnwidth}{!}{"
-        )
-        table_header_list = [
-            header_start,
-            "{",
+            "{" + format_options.get_latex_size(),
             format_options.get_tabcolsep_cmd_begin(),
-            format_options.get_latex_size(),
-            r"""
-\begin{tabular}{l|ccc|ccc}
-\toprule
-& \multicolumn{3}{c|}{$0.75G_\mathit{max}$ Laser} 
-& \multicolumn{3}{c}{Monodepth} \\
-\textbf{Strategy} 
-& \textbf{$\Delta$PSNR $\uparrow$} 
-& \textbf{$\Delta$SSIM $\uparrow$} 
-& \textbf{$\Delta$LPIPS $\downarrow$}
-& \textbf{$\Delta$PSNR $\uparrow$} 
-& \textbf{$\Delta$SSIM $\uparrow$} 
-& \textbf{$\Delta$LPIPS $\downarrow$} \\
-\midrule
-""",
+            tabular,
+            format_options.get_tabcolsep_cmd_end(),
+            r"}",
+            r"\end{table}",
         ]
-
-        tabular_processed: list[str] = []
-        for line in tabular.splitlines():
-            line = line.lstrip()
-            if line.startswith(r"\begin{tabular}"):
-                line = "\n".join(table_header_list)
-            if (
-                line.startswith(r"\toprule")
-                or line.startswith("<header_row_placeholder>")
-                or line.startswith(r"\midrule")
-            ):
-                continue
-            if line.startswith(r"\end{tabular}"):
-                if format_options.resize_to_column:
-                    line = r"\end{tabular}}"
-
-            tabular_processed.append(line)
-
-        output_lines.append("\n".join(tabular_processed))
-        output_lines.append(format_options.get_tabcolsep_cmd_end())
-        output_lines.extend([r"}", r"\end{table}"])
         tables_per_dataset[dataset] = "\n".join(output_lines)
 
-    path = ctx.output_helper.get_table_path("improvement_from_dense_init.tex")
+    path = ctx.output_helper.get_table_path("improvement_from_dense_init")
     write_file(path, join_per_dataset_tables_with_latex_comments(tables_per_dataset))
     print(f"Saved improvement from dense init table to {path}")
 
@@ -1328,7 +1331,10 @@ def main() -> None:
         list(SECTION_FUNCTION_NAMES) if "all" in args.sections else args.sections
     )
     for section_name in selected_sections:
-        print(f"===== Running section: {section_name} =====")
+        ansiesc_print(
+            "______________________________________________", ANSIEscapes.BLUE
+        )
+        ansiesc_print(f"===== Running section: {section_name} =====", ANSIEscapes.BLUE)
         section_fn = next(fn for fn in SECTION_FUNCTIONS if fn.__name__ == section_name)
         section_fn(
             ctx,
