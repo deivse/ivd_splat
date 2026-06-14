@@ -15,7 +15,8 @@ import torch
 
 from matplotlib import pyplot as plt
 
-from shared.point_cloud_io import export_pointcloud_ply
+from shared.floater_removal import floater_removal
+from shared.geom_utils import project_points
 from monodepth.depth_alignment.debug_export import debug_export_alignment
 from monodepth.depth_alignment.exceptions import LowDepthAlignmentConfidenceError
 from monodepth.depth_alignment.interface import DepthAlignmentResult
@@ -132,24 +133,12 @@ def get_valid_sfm_pts(
     )
 
 
-def project_points(
-    points3D: torch.Tensor, P: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    points3D_h = torch.hstack(
-        [points3D, torch.ones((points3D.shape[0], 1), device=points3D.device)]
-    )
-    points2D_h = points3D_h @ P.T
-    points2D = points2D_h[:, :2] / points2D_h[:, 2:3]
-    depth = points2D_h[:, 2]
-    return points2D, depth
-
-
 def project_and_filter_sfm_pts(
     image: torch.Tensor,
     sfm_points: torch.Tensor,
     sfm_points_error: torch.Tensor | None,
     P: torch.Tensor,
-    imsize: torch.Tensor,
+    imsize: torch.Size,
     predicted_depth: PredictedDepth,
     debug_export_dir: Path | None,
 ):
@@ -420,109 +409,26 @@ def monocular_depth_init(
     all_normals_tensor = torch.cat(all_normals, dim=0) if all_normals else None
 
     if config.floater_removal:
-        # This section is a modified version of the floater removal from https://github.com/OpsiClear/DepthDensifier
-        # The main difference is that we count both floater votes and consistent votes, and decide based on the fraction,
-        # not a threshold on the number of floater votes. This accounts for the fact that different points are visible in different numbers of views.
-        consistent_votes = torch.zeros(
-            all_points_tensor.shape[0], dtype=torch.int, device="cpu"
+
+        def c2w_to_w2c(c2w: torch.Tensor) -> torch.Tensor:
+            R = c2w[:3, :3]
+            t = c2w[:3, 3]
+            w2c = torch.eye(4, device=c2w.device)
+            w2c[:3, :3] = R.T
+            w2c[:3, 3] = -R.T @ t
+            return w2c[:3, :]
+
+        non_floaters = floater_removal(
+            intrinsics=(data["intrinsics"].get_K_matrix(device=device) for data in cached_data),
+            extrinsics=(c2w_to_w2c(data["cam2world"]) for data in cached_data),
+            depth_maps=(data["depth"] for data in cached_data),
+            all_points_tensor=all_points_tensor,
+            all_normals_tensor=all_normals_tensor,
+            device=device,
         )
-        floater_votes = torch.zeros(
-            all_points_tensor.shape[0], dtype=torch.int, device="cpu"
-        )
-        for data in tqdm(cached_data, desc="Floater removal"):
-            refined_depth: torch.Tensor = data["depth"]
-            mask = data["mask"]
-            intrinsics = data["intrinsics"]
-            cam2world = data["cam2world"]
-            h, w = refined_depth.shape
 
-            cam2world = cam2world.float()
-            R = cam2world[:3, :3].T
-            C = cam2world[:3, 3]
-            K = intrinsics.get_K_matrix()
-            P = K @ R @ torch.hstack([torch.eye(3), -C[:, None]])
-
-            curr_view_pts_2d, curr_view_pts2d_depths = project_points(
-                all_points_tensor, P
-            )
-
-            if all_normals_tensor is not None:
-                # --- Grazing Angle Check ---
-                # Calculate the viewing direction from the camera to each point.
-                viewing_dirs = all_points_tensor - C
-                viewing_dirs /= torch.linalg.norm(viewing_dirs, dim=1)[:, None]
-
-                # Calculate the dot product between the point's normal and the viewing direction.
-                # A dot product close to zero means a grazing angle.
-                # We negate the viewing direction because the normal points "out" of the surface.
-                dot_products = torch.sum(all_normals_tensor * -viewing_dirs, dim=1)
-
-                # Create a mask to only consider points that are not at a grazing angle.
-                # We use a threshold (e.g., cos(85 degrees) approx 0.087) to filter.
-                not_grazing_mask = dot_products > 0.087
-            else:
-                not_grazing_mask = torch.ones(
-                    all_points_tensor.shape[0], dtype=torch.bool
-                )
-
-            u, v = curr_view_pts_2d[:, 0], curr_view_pts_2d[:, 1]
-
-            # Create a mask for points that project inside the image bounds AND are not at a grazing angle
-            mask_in_bounds = (
-                (u >= 0)
-                & (u < w)
-                & (v >= 0)
-                & (v < h)
-                & (curr_view_pts2d_depths > 0)
-                & not_grazing_mask
-            )
-            if not torch.any(mask_in_bounds):
-                continue
-
-            # Get integer coordinates for depth lookup
-            u_valid = u[mask_in_bounds].to(torch.int)
-            v_valid = v[mask_in_bounds].to(torch.int)
-
-            projected_depths_valid = curr_view_pts2d_depths[mask_in_bounds]
-            refined_depths_at_projections = refined_depth[v_valid, u_valid]
-
-            # Create a mask for where the lookup is valid (non-zero depth)
-            valid_lookup_mask = refined_depths_at_projections > 0
-
-            DEPTH_THRESHOLD = 0.7
-
-            # A point is a "floater" if its projected depth is significantly
-            # LESS than the depth map's value (i.e., it's between the camera and the surface).
-            inconsistent_mask = (
-                projected_depths_valid[valid_lookup_mask]
-                < DEPTH_THRESHOLD * refined_depths_at_projections[valid_lookup_mask]
-            )
-            consistent_mask = torch.logical_and(
-                ~inconsistent_mask,
-                projected_depths_valid[valid_lookup_mask]
-                < 0.3 * refined_depths_at_projections[valid_lookup_mask],
-            )
-
-            # Get the original indices of inconsistent points and increment their vote count
-            original_indices_in_bounds = torch.where(mask_in_bounds)[0]
-            indices_with_valid_lookup = original_indices_in_bounds[valid_lookup_mask]
-            inconsistent_indices = indices_with_valid_lookup[inconsistent_mask]
-            consistent_indices = indices_with_valid_lookup[consistent_mask]
-
-            floater_votes[inconsistent_indices] += 1
-            consistent_votes[consistent_indices] += 1
-
-        FLOATER_VOTE_FRACTION_THRESH = 0.4
-        MIN_IMAGES = 3
-        few_images_mask = (floater_votes + consistent_votes) < MIN_IMAGES
-        voted_non_floater_mask = (
-            floater_votes / (floater_votes + consistent_votes + 1e-6)
-            < FLOATER_VOTE_FRACTION_THRESH
-        )
-        points_to_keep_mask = few_images_mask | voted_non_floater_mask
-
-        all_points_tensor = all_points_tensor[points_to_keep_mask]
-        all_colors_tensor = all_colors_tensor[points_to_keep_mask]
+        all_points_tensor = all_points_tensor[non_floaters]
+        all_colors_tensor = all_colors_tensor[non_floaters]
 
     return (
         all_points_tensor.cpu().numpy(),

@@ -6,15 +6,18 @@ import os
 
 from torch.types import Device as TorchDevice
 
-from depth_anything_3 import Prediction
+from depth_anything_3.specs import Prediction
 import numpy as np
 import torch
 import typer
 
 from nerfbaselines import Dataset, camera_model_from_int
 from depth_anything_3.services.inference_service import InferenceService
-from depth_anything_3.utils.export.glb import _depths_to_world_points_with_colors
+from depth_anything_3.utils.export.glb import (
+    _as_homogeneous44,
+)
 from da3.config import DA3Config
+from shared.floater_removal import floater_removal
 from shared.select_cameras_kmeans import select_cameras_kmeans
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -116,6 +119,119 @@ class ModifiedInferenceService(InferenceService):
         return prediction
 
 
+@dataclass
+class ConfLevel:
+    threshold: float
+    probability: float
+
+
+def normals_from_world_pts(points_world: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    P = points_world.view(h, w, 3)
+    # Central differences of 3D positions
+    dPdu = torch.zeros_like(P)
+    dPdv = torch.zeros_like(P)
+
+    # Interior pixels
+    dPdu[:, 1:-1] = 0.5 * (P[:, 2:] - P[:, :-2])
+    dPdv[1:-1, :] = 0.5 * (P[2:, :] - P[:-2, :])
+
+    # Left/right boundaries
+    dPdu[:, 0] = P[:, 1] - P[:, 0]
+    dPdu[:, -1] = P[:, -1] - P[:, -2]
+
+    # Top/bottom boundaries
+    dPdv[0] = P[1] - P[0]
+    dPdv[-1] = P[-1] - P[-2]
+
+    # Cross product of tangents
+    normals = torch.cross(dPdu, dPdv, dim=-1)
+
+    # Normalize
+    normals = torch.nn.functional.normalize(normals, dim=-1, eps=1e-8)
+    return normals
+
+
+def project_and_estimate_normals(
+    depth: np.ndarray,
+    K: np.ndarray,
+    ext_w2c: np.ndarray,
+    images_u8: np.ndarray,
+    conf: np.ndarray,
+    conf_levels: list[ConfLevel],
+    device: TorchDevice = "cuda",
+) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
+    """
+    For each frame, transform (u,v,1) through K^{-1} to get rays,
+    multiply by depth to camera frame, then use (w2c)^{-1} to transform to world frame.
+    Simultaneously extract colors.
+    """
+    N, H, W = depth.shape
+    us, vs = np.meshgrid(np.arange(W), np.arange(H))
+    ones = np.ones_like(us)
+    pix = np.stack([us, vs, ones], axis=-1).reshape(-1, 3)  # (H*W,3)
+
+    pts_all, col_all, normals_all = [], [], []
+
+    for i in range(N):
+        d = depth[i]  # (H,W)
+        rand_floats = np.random.rand(*d.shape)
+        valid = np.zeros_like(d, dtype=bool)
+        prev_threshold = float("inf")
+        for level in conf_levels:
+            valid |= (
+                (conf[i] < prev_threshold)
+                & (conf[i] >= level.threshold)
+                & (rand_floats <= level.probability)
+            )
+            prev_threshold = level.threshold
+        valid &= np.isfinite(d) & (d > 0)
+        if not np.any(valid):
+            continue
+
+        d_flat = d.reshape(-1)
+        vidx = np.flatnonzero(valid.reshape(-1))
+
+        K_inv = np.linalg.inv(K[i])  # (3,3)
+        c2w = np.linalg.inv(_as_homogeneous44(ext_w2c[i]))  # (4,4)
+
+        rays = K_inv @ pix.T  # (3,M)
+        Xc = rays * d_flat[None, :]  # (3,M)
+        Xc_h = np.vstack([Xc, np.ones((1, Xc.shape[1]))])
+        Xw = (c2w @ Xc_h)[:3].T.astype(np.float32)  # (M,3)
+
+        Xw_tensor = torch.from_numpy(Xw).float().to(device)
+        n_flat = normals_from_world_pts(Xw_tensor, H, W).reshape(-1, 3)
+
+        pts_all.append(Xw[vidx])
+        col_all.append(images_u8[i].reshape(-1, 3)[vidx].astype(np.uint8))  # (M,3))
+        normals_all.append(n_flat[vidx])
+
+    if len(pts_all) == 0:
+        return (
+            np.zeros((0, 3), dtype=np.float32),
+            np.zeros((0, 3), dtype=np.uint8),
+            torch.zeros((0, 3), dtype=torch.float32),
+        )
+
+    return (
+        np.concatenate(pts_all, 0),
+        np.concatenate(col_all, 0),
+        torch.cat(normals_all, 0),
+    )
+
+
+def project_points(
+    points3D: torch.Tensor, P: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    points3D_h = torch.hstack(
+        [points3D, torch.ones((points3D.shape[0], 1), device=points3D.device)]
+    )
+    points2D_h = points3D_h @ P.T
+    points2D = points2D_h[:, :2] / points2D_h[:, 2:3]
+    depth = points2D_h[:, 2]
+    return points2D, depth
+
+
 def da3_init(
     dataset: Dataset,
     config: DA3Config,
@@ -148,12 +264,35 @@ def da3_init(
         ref_view_strategy=config.ref_view_strategy,
     )
 
-    conf_thresh = np.percentile(prediction.conf, config.conf_thresh_percentile)
-    return _depths_to_world_points_with_colors(
+    conf_levels = [
+        ConfLevel(threshold=1.5, probability=1.0),
+        ConfLevel(threshold=1.25, probability=0.75),
+        ConfLevel(threshold=1.1, probability=0.5),
+        ConfLevel(threshold=1.005, probability=0.25),
+        ConfLevel(threshold=1.001, probability=0.1),
+        ConfLevel(threshold=1.000, probability=0.05),
+    ]
+    all_points_np, all_colors_np, all_normals_tensor = project_and_estimate_normals(
         prediction.depth,
         prediction.intrinsics,
         prediction.extrinsics,  # w2c
         prediction.processed_images,
         prediction.conf,
-        conf_thresh,
+        conf_levels,
+        device=device,
     )
+
+    if config.floater_removal:
+        all_points_tensor = torch.from_numpy(all_points_np).float().to(device)
+        non_floaters = floater_removal(
+            intrinsics=torch.from_numpy(prediction.intrinsics).to(device),
+            extrinsics=torch.from_numpy(prediction.extrinsics).to(device),
+            depth_maps=torch.from_numpy(prediction.depth).to(device),
+            all_points_tensor=all_points_tensor,
+            all_normals_tensor=all_normals_tensor,
+            device=device,
+        )
+        all_points_np = all_points_np[non_floaters]
+        all_colors_np = all_colors_np[non_floaters]
+
+    return all_points_np, all_colors_np
