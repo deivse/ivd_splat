@@ -16,7 +16,10 @@ class DA3Config(SerializableConfig):
     # Images will be selected using K-Means as per EDGS implementation.
     max_num_images: int | None = 500
 
-    # Model directory path as defined for awesome-depth-anything3 CLI.
+    # Use floater removal inspired by OpsiClear Depth Densifier implementation (same as monodepth).
+    floater_removal: bool = True
+
+    # Model directory path (can be on huggingface or a local path).
     model_dir: str = "depth-anything/DA3-GIANT-1.1"
     process_res: int = 504
     process_res_method: str = "upper_bound_resize"
@@ -26,5 +29,3 @@ class DA3Config(SerializableConfig):
     ] = "saddle_balanced"
     # Use ray-based pose estimation instead of camera decoder
     use_ray_pose: bool = False
-    # Confidence threshold percentile for filtering points during export (e.g., 40.0 means keep points above the 40th percentile of confidence)
-    conf_thresh_percentile: float = 5
