@@ -26,12 +26,8 @@ init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
 
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method edgs \
-    --output-dir $RESULTS_DIR
-
-# init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-#     --method edgs \
-#     --configs "full_sh_init=True" \
-#     --output-dir $RESULTS_DIR
+    --output-dir $RESULTS_DIR \
+    --configs "<default>" "full_sh_init={True}"
 
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method monodepth \
