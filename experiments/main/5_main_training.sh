@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=gs_init_compare
 #SBATCH --output=logs/slurm-%A_%a.out
-#SBATCH --time=24:00:00
+#SBATCH --time=72:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=10G
-#SBATCH --partition=amdgpuextralong
+#SBATCH --partition=amdgpulong
 #SBATCH --array=0-9
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
