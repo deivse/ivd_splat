@@ -636,6 +636,8 @@ def compute_spherical_harmonics(
     """
     assert sh_order <= 3, "fast kernel supports sh_order ≤ 3"
 
+    view_dirs = -view_dirs
+
     # Make sure the directions are unit-length and on GPU
     dirs = F.normalize(view_dirs.to(dtype), dim=-1)  # (N,V,3)
     x, y, z = dirs.unbind(dim=-1)  # each (N,V)
@@ -675,6 +677,40 @@ def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, depth: float = 1.0):
     )
     p_world_h = p_cam_h @ wvt_inv
     return p_world_h[..., :3]
+
+
+def generate_test_spherical_harmonics(out_size: int, sh_order: int) -> torch.Tensor:
+    """
+    Generate test spherical harmonics coefficients for a given number of samples and SH order.
+    The coefficients are generated such that up is red, left is green, and forward is blue.
+
+    Args:
+        out_size (int): Number of samples to generate.
+        sh_order (int): Order of the spherical harmonics.
+
+    Returns:
+        torch.Tensor: A tensor of shape (out_size, (sh_order + 1) ** 2, 3) containing the SH coefficients.
+    """
+    right = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
+    forward = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32)
+    up = torch.tensor([0.0, -1.0, 0.0], dtype=torch.float32)
+
+    red = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
+    green = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32)
+    blue = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32)
+
+    directions = (
+        torch.vstack([up, right, forward]).unsqueeze(0).repeat(out_size, 1, 1)
+    )  # (out_size, 3)
+    colors = (
+        torch.vstack([green, red, blue]).unsqueeze(0).repeat(out_size, 1, 1)
+    )  # (out_size, 3)
+
+    return compute_spherical_harmonics(
+        view_dirs=directions,
+        cols=colors,
+        sh_order=sh_order,
+    )
 
 
 @torch.no_grad()
@@ -863,86 +899,6 @@ def init_gaussians_with_corr(
                 )
             )
 
-            # Visualization of 3D pixel locations and camera centers
-            if False and source_idx % 5 == 0:  # Visualize for every 5th source image
-                plt.ion()
-                fig = plt.figure(figsize=(12, 10))
-                ax = fig.add_subplot(111, projection="3d")
-
-                # Plot triangulated points
-                triangulated_pts_np = triangulated_points.cpu().numpy()
-                ax.scatter(
-                    triangulated_pts_np[:1599, 0],
-                    triangulated_pts_np[:1599, 1],
-                    triangulated_pts_np[:1599, 2],
-                    c="blue",
-                    marker="o",
-                    s=10,
-                    label="Triangulated Points",
-                    alpha=0.6,
-                )
-
-                # Plot source points in world space for both cameras
-                source_points_A_np = reference_image_dict["source_points_world_A"][-1].cpu().numpy()
-                source_points_B_np = reference_image_dict["source_points_world_B"][-1].cpu().numpy()
-                ax.scatter(
-                    source_points_A_np[:1599, 0],
-                    source_points_A_np[:1599, 1],
-                    source_points_A_np[:1599, 2],
-                    c="red",
-                    marker="x",
-                    s=50,
-                    label="Source Points Camera A",
-                    alpha=0.8,
-                )
-                ax.scatter(
-                    source_points_B_np[:1599, 0],
-                    source_points_B_np[:1599, 1],
-                    source_points_B_np[:1599, 2],
-                    c="blue",
-                    marker="x",
-                    s=50,
-                    label="Source Points Camera B",
-                    alpha=0.8,
-                )
-
-                # Plot camera centers for this and selected viewpoints (curr NN index)
-                A_center = viewpoint_stack[source_idx].camera_center.cpu().numpy()
-                B_center = viewpoint_stack[closest_indices_selected[source_idx, NN_idx]].camera_center.cpu().numpy()
-
-                ax.scatter(
-                    A_center[0],
-                    A_center[1],
-                    A_center[2],
-                    c="red",
-                    marker="^",
-                    s=200,
-                    label="Camera A Center",
-                    edgecolors="black",
-                    linewidth=2,
-                )
-                ax.scatter(
-                    B_center[0],    
-                    B_center[1],
-                    B_center[2],
-                    c="blue",
-                    marker="^",
-                    s=200,
-                    label="Camera B Center",
-                    edgecolors="black",
-                    linewidth=2,
-                )
-
-                ax.set_xlabel("X")
-                ax.set_ylabel("Y")
-                ax.set_zlabel("Z")
-                ax.set_title("3D Keypoints and Camera Centers in World Space")
-                ax.legend()
-                plt.tight_layout()
-
-                # Save visualization
-                plt.show(block=True)
-
         (
             NNs_triangulated_points_selected,
             NNs_triangulated_points_selected_proj_errors,
@@ -1022,6 +978,52 @@ def init_gaussians_with_corr(
                 dim=-1,
             )
             directions = torch.stack([directions_to_cam1, directions_to_cam2], dim=1)
+
+            # Visualization of directions for each pixel
+            if False:  # Set to True to enable visualization
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection="3d")
+                MAX_PTS = 500
+                ax.quiver(
+                    new_xyz[:MAX_PTS, 0].cpu(),
+                    new_xyz[:MAX_PTS, 2].cpu(),
+                    -new_xyz[:MAX_PTS, 1].cpu(),
+                    directions_to_cam1[:MAX_PTS, 0].cpu(),
+                    directions_to_cam1[:MAX_PTS, 2].cpu(),
+                    -directions_to_cam1[:MAX_PTS, 1].cpu(),
+                    length=0.5,
+                    normalize=True,
+                    color="r",
+                    label="Directions to Camera 1",
+                )
+                ax.quiver(
+                    new_xyz[:MAX_PTS, 0].cpu(),
+                    new_xyz[:MAX_PTS, 2].cpu(),
+                    -new_xyz[:MAX_PTS, 1].cpu(),
+                    directions_to_cam2[:MAX_PTS, 0].cpu(),
+                    directions_to_cam2[:MAX_PTS, 2].cpu(),
+                    -directions_to_cam2[:MAX_PTS, 1].cpu(),
+                    length=0.5,
+                    normalize=True,
+                    color="b",
+                    label="Directions to Camera 2",
+                )
+                ax.scatter3D(
+                    new_xyz[:, 0].cpu(),
+                    new_xyz[:, 2].cpu(),
+                    -new_xyz[:, 1].cpu(),
+                    c=kptsA_color[points_to_keep] / 255.0,
+                    s=5,
+                    label="Triangulated Points",
+                )
+                ax.set_title("Directions from Triangulated Points to Cameras")
+                ax.set_xlabel("X")
+                ax.set_ylabel("Y")
+                ax.set_zlabel("Z")
+
+                # Save visualization
+                plt.show(block=True)
+
             colors = torch.stack(
                 [
                     torch.tensor(
