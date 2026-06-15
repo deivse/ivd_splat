@@ -19,10 +19,10 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
     
 # No eth3d for now due to lack of non-uniform image sizes support in EDGS
 
-# init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
-#     --method da3 \
-#     --output-dir $RESULTS_DIR \
-#     --configs "max_num_images={300}"
+init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+    --method da3 \
+    --output-dir $RESULTS_DIR \
+    --configs "<default>" "floater_removal={True}"
 
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method edgs \
