@@ -14,10 +14,10 @@ class DA3Config(SerializableConfig):
 
     # If set, at most max_num_images images will be used for DA3 inference.
     # Images will be selected using K-Means as per EDGS implementation.
-    max_num_images: int | None = 500
+    max_num_images: int | None = 300
 
     # Use floater removal inspired by OpsiClear Depth Densifier implementation (same as monodepth).
-    floater_removal: bool = True
+    floater_removal: bool = False
 
     # Model directory path (can be on huggingface or a local path).
     model_dir: str = "depth-anything/DA3-GIANT-1.1"
