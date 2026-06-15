@@ -40,14 +40,14 @@ def load_num_points_per_scene(
 @dataclass
 class Args:
     datasets: list[str] | None = None
-    init_methods: list[Literal[InitMethod.edgs, InitMethod.monodepth]] = field(
-        default_factory=lambda: [InitMethod.edgs, InitMethod.monodepth]
+    init_methods: list[Literal[InitMethod.edgs, InitMethod.monodepth, InitMethod.da3]] = field(
+        default_factory=lambda: [InitMethod.edgs, InitMethod.monodepth, InitMethod.da3]
     )
     results_dir: Path = Path("results")
     gaussian_cap_per_scene_file: Path = Path("num_points_per_scene.json")
     gaussian_cap_fraction: float = 1.0
     method_configs: list[str] = field(
-        default_factory=lambda: ["edgs=default", "monodepth=default"]
+        default_factory=lambda: ["edgs=default", "monodepth=default", "da3=default"]
     )
 
     output: str = "real_init_min_pts_per_scene.json"
@@ -93,6 +93,13 @@ def main() -> None:
                             f"Gaussians file not found for scene {scene} and method {method} at expected location {gaussians_file}"
                         )
                     num_pts = load_splat_ply(gaussians_file).means.shape[0]
+                elif method == InitMethod.da3:
+                    points_file = out_dir / "da3_points.ply"
+                    if not points_file.exists():
+                        raise FileNotFoundError(
+                            f"Points file not found for scene {scene} and method {method} at expected location {points_file}"
+                        )
+                    num_pts = load_pointcloud_ply(points_file)[0].shape[0]
                 else:
                     raise ValueError(f"Unknown method: {method}")
                 pts_for_methods.append(num_pts)
