@@ -151,7 +151,7 @@ def normals_from_world_pts(points_world: torch.Tensor, h: int, w: int) -> torch.
     return normals
 
 
-def project_and_estimate_normals(
+def filter_by_conf_project_and_estimate_normals(
     depth: np.ndarray,
     K: np.ndarray,
     ext_w2c: np.ndarray,
@@ -272,14 +272,16 @@ def da3_init(
         ConfLevel(threshold=1.001, probability=0.1),
         ConfLevel(threshold=1.000, probability=0.05),
     ]
-    all_points_np, all_colors_np, all_normals_tensor = project_and_estimate_normals(
-        prediction.depth,
-        prediction.intrinsics,
-        prediction.extrinsics,  # w2c
-        prediction.processed_images,
-        prediction.conf,
-        conf_levels,
-        device=device,
+    all_points_np, all_colors_np, all_normals_tensor = (
+        filter_by_conf_project_and_estimate_normals(
+            prediction.depth,
+            prediction.intrinsics,
+            prediction.extrinsics,  # w2c
+            prediction.processed_images,
+            prediction.conf,
+            conf_levels,
+            device=device,
+        )
     )
 
     if config.floater_removal:
