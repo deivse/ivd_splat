@@ -145,26 +145,34 @@ for strategy in $ALL_STRATEGIES; do
     ############### Practical Init Methods (+ Laser Scan at same size as those) ###############
 
     # First for datasets where we have laser scan data
-    INIT_METHODS="monodepth edgs laser_scan"
+    INIT_METHODS="monodepth edgs da3 laser_scan"
 
     for init_method in $INIT_METHODS; do
         train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D"
         
-        # EDGS with full SH init (disabled for now)
-        # if [ "$init_method" == "edgs" ]; then
-        #     train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
-        # fi
+        # EDGS with full SH init
+        if [ "$init_method" == "edgs" ]; then
+            train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
+        fi
+        # DA3 with floater removal
+        if [ "$init_method" == "da3" ]; then
+            train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "floater_removal=True"
+        fi
     done
 
     # Datasets without laser scan data, so just monodepth and EDGS.
-    INIT_METHODS="monodepth edgs"
+    INIT_METHODS="monodepth edgs da3"
 
     for init_method in $INIT_METHODS; do
         train_strat_with_practical_init_method $init_method "$OTHER_DATASETS"
         
-        # EDGS with full SH init (disabled for now)
-        # if [ "$init_method" == "edgs" ]; then
-        #     train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "full_sh_init=True"
-        # fi
+        # EDGS with full SH init
+        if [ "$init_method" == "edgs" ]; then
+            train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "full_sh_init=True"
+        fi
+        # DA3 with floater removal
+        if [ "$init_method" == "da3" ]; then
+            train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "floater_removal=True"
+        fi
     done
 done
