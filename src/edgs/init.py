@@ -654,29 +654,20 @@ def compute_spherical_harmonics(
     return sh_coeff
 
 
-# pixel_to_world.py  — accept NDC directly, use world_view_transform.inverse()
-def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, depth: float = 1.0):
+def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, ndc_depth: float = 0.0):
     """uv_ndc: (..., 2) with values in [-1, 1], ordered (x_ndc, y_ndc)."""
-    device = uv_ndc.device
-    W, H = camera.image_width, camera.image_height
-    fx, fy = camera.focal_x, camera.focal_y
-    cx, cy = camera.cx, camera.cy
-
-    u_pix = (uv_ndc[..., 0] + 1.0) * 0.5 * W
-    v_pix = (uv_ndc[..., 1] + 1.0) * 0.5 * H
-
-    x_cam = (u_pix - cx) * depth / fx
-    y_cam = (v_pix - cy) * depth / fy
-    z_cam = torch.full_like(x_cam, depth)
-    ones = torch.ones_like(x_cam)
-    p_cam_h = torch.stack([x_cam, y_cam, z_cam, ones], dim=-1)  # (..., 4)
-
-    # Row-vec convention: p_view = p_world @ world_view_transform
-    wvt_inv = camera.world_view_transform.inverse().to(
-        device=device, dtype=p_cam_h.dtype
-    )
-    p_world_h = p_cam_h @ wvt_inv
-    return p_world_h[..., :3]
+    inverse_full_proj_transform = torch.linalg.inv(camera.full_proj_transform)
+    uvz_ndc_h = torch.cat(
+        [
+            uv_ndc,
+            torch.full_like(uv_ndc[..., :1], ndc_depth),
+            torch.ones_like(uv_ndc[..., :1]),
+        ],
+        dim=-1,
+    )  # (..., 3)
+    point_world_h = uvz_ndc_h @ inverse_full_proj_transform  # (..., 4)
+    point_world = point_world_h[..., :3] / point_world_h[..., 3:]  # (..., 3)
+    return point_world
 
 
 def generate_test_spherical_harmonics(out_size: int, sh_order: int) -> torch.Tensor:
@@ -836,8 +827,8 @@ def init_gaussians_with_corr(
             "certainties_all": certainties_all,
             "warps_all": warps_all,
             "triangulated_points": [],
-            "source_points_world_A": [],
-            "source_points_world_B": [],
+            "source_points_world_ref": [],
+            "source_points_world_NN": [],
             "triangulated_points_errors_proj1": [],
             "triangulated_points_errors_proj2": [],
             "points_B_camera_centers": [],
@@ -886,13 +877,13 @@ def init_gaussians_with_corr(
             reference_image_dict["triangulated_points_errors_proj2"].append(
                 triangulated_points_errors_proj2
             )
-            reference_image_dict["source_points_world_A"].append(
+            reference_image_dict["source_points_world_ref"].append(
                 pixel_to_world(
                     torch.tensor(kptsA_np[:M], device=device),
                     viewpoint_stack[source_idx],
                 )
             )
-            reference_image_dict["source_points_world_B"].append(
+            reference_image_dict["source_points_world_NN"].append(
                 pixel_to_world(
                     torch.tensor(kptsB_np[:M], device=device),
                     viewpoint_stack[closest_indices_selected[source_idx, NN_idx]],
@@ -959,12 +950,12 @@ def init_gaussians_with_corr(
         )
         if cfg.full_sh_init:
             pixels_in_world_space_A = torch.stack(
-                reference_image_dict["source_points_world_A"], dim=0
+                reference_image_dict["source_points_world_ref"], dim=0
             )[
                 indices, n_indices, :
             ]  # Shape: [N, 3]
             pixels_in_world_space_B = torch.stack(
-                reference_image_dict["source_points_world_B"], dim=0
+                reference_image_dict["source_points_world_NN"], dim=0
             )[
                 indices, n_indices, :
             ]  # Shape: [N, 3]
