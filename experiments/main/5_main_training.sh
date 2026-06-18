@@ -93,11 +93,12 @@ function train_strat_with_practical_init_method {
     local datasets=$2
     # default to "default" if not set
     local init_method_config="${3:-default}"
+    local extra_config=$(prepend_space_if_set "$4")
 
     ivd_splat_runner --datasets $datasets \
         --method ivd-splat \
         --output-dir $RESULTS_DIR \
-        --configs "strategy={$strategy}" \
+        --configs "strategy={$strategy}$extra_config" \
         --init_method $init_method \
         --init_size_per_scene_file $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
         $(get_cap_max_param $FINAL_NUM_POINTS_PER_SCENE_FILE) \
@@ -154,9 +155,11 @@ for strategy in $ALL_STRATEGIES; do
         if [ "$init_method" == "edgs" ]; then
             train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "full_sh_init=True"
         fi
-        # DA3 with floater removal
         if [ "$init_method" == "da3" ]; then
+            # DA3 with floater removal
             train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "floater_removal=True"
+            # DA3 with splat init
+            train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "splat_init=True" "splat_init.increase_scale_with_fewer_splats=False"
         fi
     done
 
@@ -170,9 +173,11 @@ for strategy in $ALL_STRATEGIES; do
         if [ "$init_method" == "edgs" ]; then
             train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "full_sh_init=True"
         fi
-        # DA3 with floater removal
         if [ "$init_method" == "da3" ]; then
+            # DA3 with floater removal
             train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "floater_removal=True"
+            # DA3 with splat init
+            train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "splat_init=True" "splat_init.increase_scale_with_fewer_splats=False"
         fi
     done
 done
