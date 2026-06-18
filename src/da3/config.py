@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
-from depth_anything_3.utils.constants import DEFAULT_MODEL
+from typing import Annotated, Literal
+import tyro
 from shared.serializable_config import SerializableConfig
+
+GSInitMutexGroup = tyro.conf.create_mutex_group(required=False)
 
 
 @dataclass
@@ -16,8 +18,10 @@ class DA3Config(SerializableConfig):
     # Images will be selected using K-Means as per EDGS implementation.
     max_num_images: int | None = 300
 
-    # Use floater removal inspired by OpsiClear Depth Densifier implementation (same as monodepth).
-    floater_removal: bool = False
+    # Use floater removal inspired by OpsiClear Depth Densifier implementation (same as monodepth). (Can't be used with output_gaussians)
+    floater_removal: Annotated[bool, GSInitMutexGroup] = False
+    # Output gaussians initialized with DA3 feed-forward prediction insteaf of points. (Experimental, can't be used with floater_removal)
+    output_gaussians: Annotated[bool, GSInitMutexGroup] = False
 
     # Model directory path (can be on huggingface or a local path).
     model_dir: str = "depth-anything/DA3-GIANT-1.1"

@@ -654,13 +654,13 @@ def compute_spherical_harmonics(
     return sh_coeff
 
 
-def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, ndc_depth: float = 0.0):
+def pixel_to_world(uv_ndc: torch.Tensor, camera: Camera, ndc_near_depth: float = 0.0):
     """uv_ndc: (..., 2) with values in [-1, 1], ordered (x_ndc, y_ndc)."""
     inverse_full_proj_transform = torch.linalg.inv(camera.full_proj_transform)
     uvz_ndc_h = torch.cat(
         [
             uv_ndc,
-            torch.full_like(uv_ndc[..., :1], ndc_depth),
+            torch.full_like(uv_ndc[..., :1], ndc_near_depth),
             torch.ones_like(uv_ndc[..., :1]),
         ],
         dim=-1,
@@ -1011,6 +1011,61 @@ def init_gaussians_with_corr(
                 ax.set_xlabel("X")
                 ax.set_ylabel("Y")
                 ax.set_zlabel("Z")
+                ax.set_box_aspect([1, 1, 1])  # aspect ratio is 1:1:1
+                ax.set_aspect("equal")
+
+                # Save visualization
+                plt.show(block=True)
+
+            if False:  # Set to True to enable visualization
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection="3d")
+                # world space pixels visualization
+                ax.scatter3D(
+                    pixels_in_world_space_A[:, 0].cpu(),
+                    pixels_in_world_space_A[:, 2].cpu(),
+                    -pixels_in_world_space_A[:, 1].cpu(),
+                    c=kptsA_color / 255.0,
+                    s=5,
+                    label="Pixels (A)",
+                )
+
+                ax.set_title("Pixels (A)")
+                ax.set_xlabel("X")
+                ax.set_ylabel("Y")
+                ax.set_zlabel("Z")
+                ax.set_box_aspect([1, 1, 1])  # aspect ratio is 1:1:1
+                ax.set_aspect("equal")
+
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection="3d")
+                # world space pixels visualization
+                ax.scatter3D(
+                    pixels_in_world_space_B[:, 0].cpu(),
+                    pixels_in_world_space_B[:, 2].cpu(),
+                    -pixels_in_world_space_B[:, 1].cpu(),
+                    c=kptsB_color / 255.0,
+                    # c="red",
+                    s=1,
+                    label="Pixels (B)",
+                )
+                for i in range(3):
+                    ax.scatter3D(
+                        reference_image_dict["source_points_world_NN"][i][:, 0].cpu(),
+                        reference_image_dict["source_points_world_NN"][i][:, 2].cpu(),
+                        -reference_image_dict["source_points_world_NN"][i][:, 1].cpu(),
+                        c="red",
+                        s=1,
+                        label=f"Pixels (B[{i}])",
+                    )
+
+                ax.set_title("Pixels (B)")
+                ax.set_xlabel("X")
+                ax.set_ylabel("Y")
+                ax.set_zlabel("Z")
+                # ensure uniform axis scale
+                ax.set_box_aspect([1, 1, 1])  # aspect ratio is 1:1:1
+                ax.set_aspect("equal")
 
                 # Save visualization
                 plt.show(block=True)

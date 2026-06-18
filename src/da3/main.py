@@ -16,6 +16,7 @@ from da3.config import DA3Config
 from da3.proxy_dataset import (
     NB_META_FILE_NAME,
     POINTS_FILE_NAME,
+    SPLATS_FILE_NAME,
     write_proxy_dataset_to_disk,
 )
 from shared.point_cloud_io import export_pointcloud_ply
@@ -32,6 +33,7 @@ def main() -> None:
     )
 
     config = tyro.cli(tyro.conf.FlagConversionOff[DA3Config])
+
     mlflow_run = mlflow_log_config_params(config)
 
     # Load train dataset
@@ -55,8 +57,11 @@ def main() -> None:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     save_init_info_json(
         config.output_dir,
-        ivd_splat_init_type="dense",
-        required_files=[POINTS_FILE_NAME, NB_META_FILE_NAME],
+        ivd_splat_init_type="splat" if config.output_gaussians else "dense",
+        required_files=[
+            SPLATS_FILE_NAME if config.output_gaussians else POINTS_FILE_NAME,
+            NB_META_FILE_NAME,
+        ],
     )
 
     sfm_pts = dataset["points3D_xyz"]
@@ -70,7 +75,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     start_time = datetime.now()
-    points, rgbs = da3_init(dataset, config, device)
+    points, rgbs, prediction = da3_init(dataset, config, device)
     end_time = datetime.now()
     if mlflow_run is not None:
         mlflow.log_metric("init_only_runtime", (end_time - start_time).total_seconds())
@@ -80,6 +85,7 @@ def main() -> None:
         dataset,
         points,
         rgbs,
+        prediction,
         path=config.output_dir,
     )
 
