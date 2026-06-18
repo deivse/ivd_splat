@@ -91,6 +91,7 @@ class ModifiedInferenceService(InferenceService):
         align_to_input_ext_scale: bool = True,
         use_ray_pose: bool = False,
         ref_view_strategy: str = "saddle_balanced",
+        infer_gs: bool = False,
     ) -> Prediction:
         model = self.load_model()
 
@@ -105,6 +106,7 @@ class ModifiedInferenceService(InferenceService):
             "ref_view_strategy": ref_view_strategy,
             "extrinsics": data.extrinsics,
             "intrinsics": data.intrinsics,
+            "infer_gs": infer_gs,
         }
 
         prediction = model.inference(**inference_kwargs)
@@ -236,7 +238,7 @@ def da3_init(
     dataset: Dataset,
     config: DA3Config,
     device: TorchDevice = "cuda",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, Prediction]:
     """Run pose conditioned depth estimation on dataset.
 
     Args:
@@ -262,6 +264,7 @@ def da3_init(
         process_res_method=config.process_res_method,
         use_ray_pose=config.use_ray_pose,
         ref_view_strategy=config.ref_view_strategy,
+        infer_gs=config.output_gaussians,
     )
 
     conf_levels = [
@@ -297,4 +300,4 @@ def da3_init(
         all_points_np = all_points_np[non_floaters]
         all_colors_np = all_colors_np[non_floaters]
 
-    return all_points_np, all_colors_np
+    return (all_points_np, all_colors_np, prediction)

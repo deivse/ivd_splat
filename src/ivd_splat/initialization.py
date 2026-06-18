@@ -322,29 +322,6 @@ def _get_splat_subset_inplace(splat: SplatData, config: Config) -> None:
         splat.scales = np.log(np.exp(splat.scales) * (1 / splat_fraction))
 
 
-# def transform_shs(shs_feat, rotation_matrix):
-#     """
-#     https://github.com/graphdeco-inria/gaussian-splatting/issues/176#issuecomment-2450891300
-#     """
-#     ## rotate shs
-#     P = torch.tensor(
-#         [[0, 0, 1], [1, 0, 0], [0, 1, 0]]
-#     ).float()  # switch axes: yzx -> xyz
-
-#     permuted_rotation_matrix = P.T @ rotation_matrix @ P
-#     rot_angles = o3._rotation.matrix_to_angles(permuted_rotation_matrix)
-#     # Construction coefficient
-#     D_1 = o3.wigner_D(1, rot_angles[0], -rot_angles[1], rot_angles[2])
-#     D_2 = o3.wigner_D(2, rot_angles[0], -rot_angles[1], rot_angles[2])
-#     D_3 = o3.wigner_D(3, rot_angles[0], -rot_angles[1], rot_angles[2])
-
-#     # rotation of the shs features
-#     shs_feat[:, :3] = D_1 @ shs_feat[:, :3]
-#     shs_feat[:, 3:8] = D_2 @ shs_feat[:, 3:8]
-#     shs_feat[:, 8:15] = D_3 @ shs_feat[:, 8:15]
-#     return shs_feat
-
-
 def transform_shs(shs_feat, rotation_matrix, beta_coef=-1.0):
     # Rotate SH values
     P = torch.tensor([[0, 0, 1], [1, 0, 0], [0, 1, 0]]).float()
@@ -360,6 +337,12 @@ def transform_shs(shs_feat, rotation_matrix, beta_coef=-1.0):
     return torch.cat(
         (D_1 @ shs_feat[:, :3], D_2 @ shs_feat[:, 3:8], D_3 @ shs_feat[:, 8:15]), dim=1
     )
+
+
+def rotate_quaternions(quats, rotation_matrix):
+    rot_quat = o3.matrix_to_quaternion(rotation_matrix)
+    rot_quat = rot_quat / torch.norm(rot_quat)
+    return o3.compose_quaternion(rot_quat, quats)
 
 
 def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> SplatData:
@@ -384,17 +367,10 @@ def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> Spla
     )
     splat.means = transform_points(parser.transform, splat.means).to(torch.float32)
     splat.scales = torch.log(torch.exp(splat.scales) * scale).to(torch.float32)
-    splat.shN = transform_shs(splat.shN, torch.from_numpy(rotation).float())
 
-    # TODO: this is only fine as long as the init method outputs isotropic covariances.
-    # If we want to support anisotropic covariances we need to apply rotation too
-    # splat.quats = rotate_quaternions(splat.quats, rotation)
-    scales_are_isotropic = torch.allclose(
-        splat.scales[:, 0], splat.scales[:, 1]
-    ) and torch.allclose(splat.scales[:, 1], splat.scales[:, 2])
-    if not scales_are_isotropic:
-        raise NotImplementedError(
-            "Transforming initial splats with anisotropic scales is not implemented!"
-        )
+    rot_torch = torch.from_numpy(rotation).float()
+
+    splat.shN = transform_shs(splat.shN, rot_torch)
+    splat.quats = rotate_quaternions(splat.quats, rot_torch)
 
     return splat

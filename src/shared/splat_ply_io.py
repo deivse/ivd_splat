@@ -31,7 +31,14 @@ def load_splat_ply(path: Path | str) -> SplatData:
     path = Path(path)
     with path.open("rb") as f:
         ply_bytes = f.read()
-    return _parse_splat_ply_bytes(ply_bytes)
+    splat_data = _parse_splat_ply_bytes(ply_bytes)
+    if splat_data.shN.shape[1] == 0:
+        N = 3
+        # If the SH order is 0, we add dummy SH coefficients since later code relies on those being present.
+        splat_data.shN = torch.zeros(
+            (splat_data.sh0.shape[0], (N + 1) ** 2 - 1, 3),
+        ).to(splat_data.sh0)
+    return splat_data
 
 
 def export_splat_ply(path: Path | str, splats: SplatData):
@@ -94,11 +101,15 @@ def _parse_splat_ply_bytes(ply_bytes: bytes) -> SplatData:
 
     shN_indices = [i for i, p in enumerate(properties) if p.startswith("f_rest_")]
     # It is safer to sort these to ensure they are in order (f_rest_0, f_rest_1...)
-    shN_indices.sort(key=lambda x: int(properties[x].split('_')[-1]))
-    
+    shN_indices.sort(key=lambda x: int(properties[x].split("_")[-1]))
+
     num_sh_per_channel = len(shN_indices) // 3
     # Reshape to (N, 3, 15) then transpose to (N, 15, 3)
-    shN = data[:, shN_indices].reshape(num_splats, 3, num_sh_per_channel).transpose(0, 2, 1)
+    shN = (
+        data[:, shN_indices]
+        .reshape(num_splats, 3, num_sh_per_channel)
+        .transpose(0, 2, 1)
+    )
 
     opacity_indices = [i for i, p in enumerate(properties) if p.startswith("opacity")]
     assert len(opacity_indices) == 1, "Expected 1 opacity property."
