@@ -159,7 +159,9 @@ for strategy in $ALL_STRATEGIES; do
             # DA3 with floater removal
             train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "floater_removal=True"
             # DA3 with splat init
-            train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" "splat_init=True" "splat_init.increase_scale_with_fewer_splats=False"
+            train_strat_with_practical_init_method $init_method "$GT_DATASETS_EXCEPT_ETH3D" \
+                                                   "splat_init=True_max_num_images=200" \
+                                                   "splat_init.increase_scale_with_fewer_splats=False"
         fi
     done
 
@@ -177,7 +179,9 @@ for strategy in $ALL_STRATEGIES; do
             # DA3 with floater removal
             train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "floater_removal=True"
             # DA3 with splat init
-            train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" "splat_init=True" "splat_init.increase_scale_with_fewer_splats=False"
+            train_strat_with_practical_init_method $init_method "$OTHER_DATASETS" \
+                                                   "splat_init=True_max_num_images=200" \
+                                                   "splat_init.increase_scale_with_fewer_splats=False"
         fi
     done
 done

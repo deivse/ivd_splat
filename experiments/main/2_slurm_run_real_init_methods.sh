@@ -22,7 +22,7 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method da3 \
     --output-dir $RESULTS_DIR \
-    --configs "<default>" "floater_removal={True}" "output_gaussians=True"
+    --configs "<default>" "floater_removal={True}" "output_gaussians={True} max_num_images={200}"
 
 init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
     --method edgs \
