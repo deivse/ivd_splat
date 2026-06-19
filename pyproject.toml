@@ -36,7 +36,7 @@ dependencies = [
   "tensorly>=0.9.0",
   "mlflow>=3.9.0",
   "plyfile>=1.1.3",
-  "depth-anything-3 @ git+https://github.com/deivse/Depth-Anything-3.git@1e8ca8a94fe571776167c6017a45d9e05ae527a5",
+  "depth-anything-3 @ git+https://github.com/deivse/Depth-Anything-3.git@4fc3d97f9f50fa2d264b7a67949f8d35f14e0085",
   "e3nn>=0.6.0",
 ]
 optional-dependencies = { dev = [
