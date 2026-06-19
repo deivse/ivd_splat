@@ -86,7 +86,7 @@ def main() -> None:
         points,
         rgbs,
         prediction,
-        path=config.output_dir,
+        config
     )
 
 
