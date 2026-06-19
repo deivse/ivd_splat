@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=10G
 #SBATCH --partition=amdgpufast
-#SBATCH --array=0-9
+#SBATCH --array=0-7
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
 
