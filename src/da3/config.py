@@ -22,6 +22,8 @@ class DA3Config(SerializableConfig):
     floater_removal: Annotated[bool, GSInitMutexGroup] = False
     # Output gaussians initialized with DA3 feed-forward prediction insteaf of points. (Experimental, can't be used with floater_removal)
     output_gaussians: Annotated[bool, GSInitMutexGroup] = False
+    # Only save gaussians with predicted opacity (derived from confidence) above this threshold.
+    min_gaussian_opacity: float | None = 0.01
 
     # Model directory path (can be on huggingface or a local path).
     model_dir: str = "depth-anything/DA3-GIANT-1.1"
