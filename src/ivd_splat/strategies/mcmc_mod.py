@@ -63,7 +63,7 @@ class MCMCModStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
         splat_scales = torch.abs(torch.exp(args.splats["scales"]))
         scale_reg = (
             self.base_scale_reg * splat_scales.mean()
-            + self.view_scale_reg * (splat_scales * valid_in_image).mean()
+            + self.view_scale_reg * (splat_scales * valid_in_image.view(-1, 1)).mean()
         )
         return opacity_reg + scale_reg
 
