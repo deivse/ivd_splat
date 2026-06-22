@@ -15,8 +15,11 @@ class MCMCModStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
         "verbose",
     }
 
-    opacity_reg: float = 0.01
-    scale_reg: float = 0.01
+    base_opacity_reg: float = 0.0025
+    base_scale_reg: float = 0.0025
+    view_opacity_reg: float = 0.01
+    view_scale_reg: float = 0.01
+
     init_scale_mult: float = 0.1
 
     def get_cap_max(self):
@@ -50,17 +53,17 @@ class MCMCModStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
         """
 
         radii = args.info["radii"]
-        valid_in_image = (radii > 0).all(dim=-1).squeeze()
+        valid_in_image: torch.Tensor = (radii > 0).all(dim=-1).squeeze()
 
+        splat_opas = torch.abs(torch.sigmoid(args.splats["opacities"]))
         opacity_reg = (
-            self.opacity_reg
-            * torch.abs(torch.sigmoid(args.splats["opacities"]) * valid_in_image).mean()
+            self.base_opacity_reg * splat_opas.mean()
+            + self.view_opacity_reg * (splat_opas * valid_in_image).mean()
         )
+        splat_scales = torch.abs(torch.exp(args.splats["scales"]))
         scale_reg = (
-            self.scale_reg
-            * torch.abs(
-                torch.exp(args.splats["scales"]) * valid_in_image.view(-1, 1)
-            ).mean()
+            self.base_scale_reg * splat_scales.mean()
+            + self.view_scale_reg * (splat_scales * valid_in_image).mean()
         )
         return opacity_reg + scale_reg
 
