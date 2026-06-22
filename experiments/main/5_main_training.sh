@@ -61,5 +61,5 @@ for strategy in $ALL_STRATEGIES; do
     # First for datasets where we have laser scan data
     run_practical_init_methods_with_ablations "$GT_DATASETS_EXCEPT_ETH3D" "monodepth edgs da3 laser_scan"
     # Datasets without laser scan data, so just monodepth and EDGS.
-    run_practical_init_methods_no_ablations "$OTHER_DATASETS" "monodepth edgs da3"
+    run_practical_init_methods_with_ablations "$OTHER_DATASETS" "monodepth edgs da3"
 done
