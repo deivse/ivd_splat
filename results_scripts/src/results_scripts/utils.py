@@ -53,13 +53,6 @@ def fraction_name(fraction: str | float) -> str:
     return f"{float(fraction) * 100:.0f}% $G_\\mathit{{max}}$"
 
 
-def noise_name(noise: str | float) -> str:
-    noise_float = float(noise)
-    if noise_float == 0.0:
-        return "$\\sigma = 0$"
-    return f"$\\sigma = {noise_float} \\cdot S_\\text{{scene}}$"
-
-
 def save_figure_svg(
     fig: plt.Figure,
     output: Path,

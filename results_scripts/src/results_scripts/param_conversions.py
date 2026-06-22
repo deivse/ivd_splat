@@ -52,3 +52,9 @@ PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
     "nanogs_simplify_iter": defaulter("-1"),
     "eval_iter": converter(int, default=0),
 }
+
+INIT_METHOD_PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
+    "output_gaussians": boolean_conversion(default=False),
+    "floater_removal": boolean_conversion(default=False),
+    "full_sh_init": boolean_conversion(default=False),
+}

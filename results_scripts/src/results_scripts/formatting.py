@@ -17,15 +17,31 @@ class TableCellType(StrEnum):
     minmax = enum.auto()
     range_only = enum.auto()
     all_runwise = enum.auto()
-    scene_stddev = enum.auto()
+    scene_std = enum.auto()
+
+
+class MetricsLayout(StrEnum):
+    # One tabular section per metric, stacked vertically.
+    vertical = enum.auto()
+    # Metrics laid out horizontally as \multicolumn groups in a single tabular.
+    horizontal = enum.auto()
 
 
 @dataclass
 class FormatOptions:
-    table_cell_type: TableCellType = TableCellType.std
+    cell_type: TableCellType = TableCellType.std
     table_size: Literal["default", "small"] = "small"
-    resize_to_column: bool = True
-    tabcolsep_fraction: float = 1.0
+    resizebox: bool = True
+    tabcolsep_fraction: float = 0.8
+    # How to arrange metrics in multi-metric tables: "stacked" places one
+    # tabular section per metric vertically; "side_by_side" lays the metrics out
+    # horizontally as \multicolumn groups within a single tabular.
+    metrics_layout: MetricsLayout = MetricsLayout.vertical
+    table_env_override: Literal["table", "table*"] | None = None
+    # When True, per-dataset tables are emitted as ``subtable`` blocks and
+    # combined into a single floating ``table``/``table*`` environment instead of
+    # one separate float per dataset. Requires the ``subcaption`` LaTeX package.
+    combine_datasets_as_subtables: bool = True
 
     def get_latex_size(self) -> str:
         if self.table_size == "default":
@@ -45,6 +61,15 @@ class FormatOptions:
             return ""
         return "\\endgroup"
 
+    def get_table_env(self) -> str:
+        if self.table_env_override is not None:
+            return self.table_env_override
+        if self.metrics_layout == MetricsLayout.horizontal:
+            return "table*"
+        if self.metrics_layout == MetricsLayout.vertical:
+            return "table"
+        raise ValueError(f"Invalid metrics layout: {self.metrics_layout}")
+
 
 class CellData(typing.NamedTuple):
     metric_id: str
@@ -55,6 +80,8 @@ class CellData(typing.NamedTuple):
 
     scene_stddev: float
 
+    mean_measurement_count: float
+
     @staticmethod
     def for_metric(df: pd.DataFrame, metric_id: str) -> "CellData":
         return CellData(
@@ -64,6 +91,7 @@ class CellData(typing.NamedTuple):
             min=df[metric_id].map(lambda x: np.array(x).min()).mean(),
             max=df[metric_id].map(lambda x: np.array(x).max()).mean(),
             scene_stddev=df[metric_id].map(lambda x: np.array(x).mean()).std(),
+            mean_measurement_count=df[metric_id].map(lambda x: len(x)).mean(),
         )
 
 
@@ -95,7 +123,7 @@ def make_cell_formatter(
         return (
             lambda x: f"${x.mean:.{get_rounding(x)}f} \\pm {x.stddev:.{get_rounding(x)}f} ({x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f})$"
         )
-    elif cell_type == TableCellType.scene_stddev:
+    elif cell_type == TableCellType.scene_std:
         return (
             lambda x: f"${x.mean:.{get_rounding(x)}f} \\pm {x.scene_stddev:.{get_rounding(x)}f}$"
         )

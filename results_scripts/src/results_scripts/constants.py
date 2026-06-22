@@ -111,7 +111,7 @@ METRIC_PRETTY_NAMES = {
     "eval-all-test/ssim": "SSIM ↑",
     "eval-all-test/lpips": "LPIPS ↓",
     "train/num-gaussians": "Num Gaussians",
-    "train/total-train-time": "Total Train Time (min)",
+    "train/total-train-time": "Train Time (min)",
 }
 PER_SCENE_VARYING_PARAMS = {"scene", "dense_init.target_num_points", "strategy.cap_max"}
 
