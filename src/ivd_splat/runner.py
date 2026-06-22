@@ -556,6 +556,7 @@ class Runner:
                     state=self.strategy_state,
                     step=step,
                     info=info,
+                    splats=self.splats,
                 )
             )
 

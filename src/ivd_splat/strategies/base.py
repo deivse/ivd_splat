@@ -28,6 +28,7 @@ class IVDSplatBaseStrategy(Strategy, SerializableConfig, abc.ABC):
         state: Dict[str, Any]
         step: int
         info: Dict[str, Any]
+        splats: Dict[str, torch.nn.Parameter]
 
     class StepPostBackwardArgs(typing.NamedTuple):
         """Arguments for the `step_post_backward` callback."""
