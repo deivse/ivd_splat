@@ -40,7 +40,7 @@ for strategy in $ALL_STRATEGIES; do
     train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE
 
     ## Tmp test adpative subsample
-    if [ "$strategy" == "MCMCStrategy" || "$strategy" == "DefaultWithGaussianCapStrategy" ]; then
+    if [[ "$strategy" == "MCMCStrategy" || "$strategy" == "DefaultWithGaussianCapStrategy" ]]; then
         train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE "dense_init.target_points_fraction={$INIT_FRACTIONS} dense_init.sampling={adaptive}"
         train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE "dense_init.sampling={adaptive}"
     fi
