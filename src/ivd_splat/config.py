@@ -25,7 +25,10 @@ class DenseInitConfig(SerializableConfig):
     # Adaptive - sample each point with probability proportional to color differences with it's K nearest neighbors
     sampling: Literal["uniform", "adaptive"] = "uniform"
 
-    knn_num_neighbors: int = 3  # for adaptive sampling
+    knn_num_neighbors: int = 15  # for adaptive sampling
+    softmax_temp: float = 0.0001  # for adaptive sampling, lower is more peaky
+    # for adaptive sampling, increasing it, ignores progressively more color differences, reducing the probabilty for sampling similar points.
+    color_dist_thresh: float = 0.01
 
 
 @dataclass
