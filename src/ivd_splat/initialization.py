@@ -7,6 +7,7 @@ from ivd_splat.config import Config
 from ivd_splat.datasets.colmap import Parser
 from ivd_splat.datasets.normalize import transform_points
 from ivd_splat.nerfbaselines_integration.parser import NerfbaselinesParser
+from ivd_splat.utils.large_tensor_quantile import large_tensor_quantile
 from ivd_splat.utils.runner_utils import knn, rgb_to_sh
 
 from shared.point_cloud_io import load_pointcloud_ply
@@ -143,6 +144,7 @@ def _pick_dense_init_points(
     points: torch.Tensor,
     rgbs: torch.Tensor,
     config: Config,
+    scene_scale: float,
 ) -> torch.Tensor:
     """
     Select a subset of points for dense initialization.
@@ -150,6 +152,7 @@ def _pick_dense_init_points(
         points: (N, 3) tensor of point positions.
         rgbs: (N, 3) tensor of point colors.
         config: Configuration object with dense_init parameters.
+        scene_scale: The extent of the scene, as defined by the cameras.
     Returns:
         Indices of selected points.
     """
@@ -191,29 +194,60 @@ def _pick_dense_init_points(
             f"Adaptive sampling currently supports up to {torch_multinomial_max_input_size} points."
         )
 
-    while points.shape[0] > 100 * target_num_pts or (
-        points.shape[0] > torch_multinomial_max_input_size
+    initial_subsample_target_mult = 200
+    if (
+        points.shape[0] > initial_subsample_target_mult * target_num_pts
+        or points.shape[0] > torch_multinomial_max_input_size
     ):
-        _LOGGER.info(
-            f"Downsampling point cloud from {points.shape[0]} to {points.shape[0] // 2} points with random sampling."
+        initial_sample_num_pts = min(
+            initial_subsample_target_mult * target_num_pts,
+            torch_multinomial_max_input_size,
         )
-        perm = torch.randperm(points.shape[0])[: points.shape[0] // 2]
-        points = points[perm]
-        rgbs = rgbs[perm]
-        indices = indices[perm]
+        _LOGGER.info(
+            f"Performing initial uniform subsample from {points.shape[0]} to {initial_sample_num_pts} points."
+        )
+        indices = torch.randperm(points.shape[0])[:initial_sample_num_pts]
+        points = points[indices]
+        rgbs = rgbs[indices]
 
     _LOGGER.info(
         "Adaptive sampling using KNN and color-based probabilities on %d points.",
         points.shape[0],
     )
 
-    _, knn_indices = knn(points, K=config.dense_init.knn_num_neighbors)  # [N, K + 1]
-    avg_color_dist2 = (
-        ((rgbs.unsqueeze(1) - rgbs[knn_indices]) ** 2).sum(dim=-1).mean(dim=1)
-    )  # [N,]
+    knn_dists, knn_indices = knn(
+        points, K=config.dense_init.knn_num_neighbors
+    )  # [N, K]
+    color_dists_squared = ((rgbs.unsqueeze(1) - rgbs[knn_indices]) ** 2).sum(
+        dim=-1
+    )  # [N, K]
+    # Reduce sensitivity to color noise
+    color_dists_squared = torch.clamp(
+        color_dists_squared, min=config.dense_init.color_dist_thresh**2
+    )
 
-    prob = avg_color_dist2 / avg_color_dist2.max()
-    prob = prob / prob.sum()
+    q75 = large_tensor_quantile(knn_dists.view(-1), 0.75)
+
+    clamped_knn_dists = torch.clamp(knn_dists, max=q75)
+
+    prob = torch.softmax(
+        (color_dists_squared * clamped_knn_dists).mean(dim=-1).to(torch.float64)
+        / config.dense_init.softmax_temp,
+        dim=0,
+    )
+
+    # # debug export pointcloud colored by probability
+    # from shared.point_cloud_io import export_pointcloud_ply
+
+    # print(prob.min(), prob.max(), (prob != prob).max())
+
+    # prob_vis = prob.view([-1, 1]).repeat([1, 3]).cpu().numpy()
+    # prob_vis = (prob_vis - prob_vis.min()) / (prob_vis.max() - prob_vis.min())
+    # export_pointcloud_ply(
+    #     points.cpu().numpy(),
+    #     prob_vis,
+    #     "adaptive_sampling_debug.ply",
+    # )
 
     adaptive_indices = torch.multinomial(prob, target_num_pts, replacement=False)
     return indices[adaptive_indices]
@@ -265,7 +299,7 @@ def point_cloud_init(
         raise RuntimeError("Number of points and rgbs must be identical.")
 
     if config.init_type == "dense":
-        point_indices = _pick_dense_init_points(points, rgbs, config)
+        point_indices = _pick_dense_init_points(points, rgbs, config, scene_scale)
         points = points[point_indices]
         rgbs = rgbs[point_indices]
 
