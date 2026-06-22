@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import logging
 
 import typing
@@ -84,10 +85,18 @@ class InitResult(typing.NamedTuple):
         )
 
 
+@dataclass
+class RawInitData:
+    points: torch.Tensor
+    rgbs: torch.Tensor
+    sparse_points: torch.Tensor | None = None
+    sparse_rgbs: torch.Tensor | None = None
+
+
 def get_point_data_from_parser(
     config: Config,
     parser: Parser | NerfbaselinesParser,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> RawInitData:
     if config.init_type not in ("sparse", "dense"):
         raise ValueError(
             f"Unsupported init_type {config.init_type} for get_point_data_from_parser."
@@ -113,7 +122,21 @@ def get_point_data_from_parser(
             )
             points, rgbs = load_pointcloud_ply(dense_points_path)
             points = transform_points(parser.transform, points)
-            return torch.from_numpy(points).float(), torch.from_numpy(rgbs).float()
+
+            raw_init_data = RawInitData(
+                points=torch.from_numpy(points).float(),
+                rgbs=torch.from_numpy(rgbs).float(),
+            )
+            if config.dense_init.include_sparse:
+                _LOGGER.info(
+                    "Including sparse points from parser in addition to dense points for initialization."
+                )
+                raw_init_data.sparse_points = torch.from_numpy(parser.points).float()
+                raw_init_data.sparse_rgbs = torch.from_numpy(
+                    parser.points_rgb / 255.0
+                ).float()
+
+            return raw_init_data
         elif not parser.nerfbaselines_dataset["metadata"].get(
             "ivd_splat_dense_init", False
         ):
@@ -125,6 +148,11 @@ def get_point_data_from_parser(
                     else "<Error: parser.points is None>"
                 ),
             )
+        elif config.dense_init.include_sparse:
+            raise RuntimeError(
+                "Config is set to include sparse points for dense initialization, but the Nerfbaselines dataset provides dense points by overriding the dataset's original point fields, so the sparse data is not available. Please check your configuration and dataset."
+            )
+
     elif (
         config.init_type == "sparse"
         and isinstance(parser, NerfbaselinesParser)
@@ -134,17 +162,17 @@ def get_point_data_from_parser(
             "Parser indicates that the initialization data is dense, but config.init_type is set to sparse. Please check your configuration and dataset."
         )
 
-    return (
-        torch.from_numpy(parser.points).float(),
-        torch.from_numpy(parser.points_rgb / 255.0).float(),
+    return RawInitData(
+        points=torch.from_numpy(parser.points).float(),
+        rgbs=torch.from_numpy(parser.points_rgb / 255.0).float(),
     )
 
 
 def _pick_dense_init_points(
     points: torch.Tensor,
     rgbs: torch.Tensor,
+    num_sparse_pts: int,
     config: Config,
-    scene_scale: float,
 ) -> torch.Tensor:
     """
     Select a subset of points for dense initialization.
@@ -164,6 +192,8 @@ def _pick_dense_init_points(
             f"Selecting {config.dense_init.target_points_fraction} * {target_num_pts} points for dense initialization."
         )
         target_num_pts = int(target_num_pts * config.dense_init.target_points_fraction)
+
+    target_num_pts -= num_sparse_pts
 
     if target_num_pts == points.shape[0]:
         _LOGGER.info("Using all points for dense initialization.")
@@ -286,22 +316,46 @@ def _add_noise_to_init_points(
 
 
 def point_cloud_init(
-    points: torch.Tensor, rgbs: torch.Tensor, config: Config, scene_scale: float
+    raw_init_data: RawInitData, config: Config, scene_scale: float
 ) -> SplatData:
     """
     Create splats from point cloud as in base 3DGS.
     """
+    points = raw_init_data.points
+    rgbs = raw_init_data.rgbs
+    sparse_points = raw_init_data.sparse_points
+    sparse_rgbs = raw_init_data.sparse_rgbs
     _LOGGER.info(
         "initializing gaussians from point cloud with %d points", points.shape[0]
     )
 
     if points.shape[0] != rgbs.shape[0]:
         raise RuntimeError("Number of points and rgbs must be identical.")
+    if (sparse_points is not None) != (sparse_rgbs is not None):
+        raise RuntimeError(
+            "sparse_points and sparse_rgbs must both be provided or both be None."
+        )
+
+    num_sparse_pts = 0
+    if sparse_points is not None and sparse_rgbs is not None:
+        if sparse_points.shape[0] != sparse_rgbs.shape[0]:
+            raise RuntimeError(
+                "Number of sparse points and sparse rgbs must be identical."
+            )
+        _LOGGER.info(
+            "including %d sparse points from parser in addition to dense points for initialization.",
+            sparse_points.shape[0],
+        )
+        num_sparse_pts = sparse_points.shape[0]
 
     if config.init_type == "dense":
-        point_indices = _pick_dense_init_points(points, rgbs, config, scene_scale)
+        point_indices = _pick_dense_init_points(points, rgbs, num_sparse_pts, config)
         points = points[point_indices]
         rgbs = rgbs[point_indices]
+
+    if sparse_points is not None and sparse_rgbs is not None:
+        points = torch.cat([points, sparse_points], dim=0)
+        rgbs = torch.cat([rgbs, sparse_rgbs], dim=0)
 
     points, rgbs = _add_noise_to_init_points(points, rgbs, config, scene_scale)
 

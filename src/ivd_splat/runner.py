@@ -9,6 +9,7 @@ from typing import Dict, Optional, Tuple
 
 import imageio
 from ivd_splat.initialization import (
+    RawInitData,
     get_point_data_from_parser,
     point_cloud_init,
     load_splat_from_nerfbaselines_parser,
@@ -72,12 +73,20 @@ def create_splats_with_optimizers(
             * (torch.rand((config.random_init.num_points, 3)) * 2 - 1)
         )
         rgbs = torch.rand((config.random_init.num_points, 3))
-        init_splat_data = point_cloud_init(points, rgbs, config, scene_scale)
+        init_splat_data = point_cloud_init(
+            RawInitData(points=points, rgbs=rgbs), config, scene_scale
+        )
     elif config.init_type in ("sparse", "dense"):
-        points, rgbs = get_point_data_from_parser(config, parser)
-        assert rgbs.max() <= 1.0 and rgbs.min() >= 0.0, "RGB values should be in [0, 1]"
+        raw_init_data = get_point_data_from_parser(config, parser)
+        assert (
+            raw_init_data.rgbs.max() <= 1.0 and raw_init_data.rgbs.min() >= 0.0
+        ), "RGB values should be in [0, 1]"
+        assert raw_init_data.sparse_rgbs is None or (
+            raw_init_data.sparse_rgbs.max() <= 1.0
+            and raw_init_data.sparse_rgbs.min() >= 0.0
+        ), "Sparse RGB values should be in [0, 1]"
 
-        init_splat_data = point_cloud_init(points, rgbs, config, scene_scale)
+        init_splat_data = point_cloud_init(raw_init_data, config, scene_scale)
     elif config.init_type == "splat":
         # Parser type check performed inside load_splat_from_nerfbaselines_parser
         init_splat_data = load_splat_from_nerfbaselines_parser(config, parser)
