@@ -16,7 +16,7 @@ from results_scripts.constants import (
     PER_SCENE_VARYING_PARAMS,
     get_default_strategy_args,
 )
-from results_scripts.param_conversions import PARAM_CONVERSIONS, boolean_conversion
+from results_scripts.param_conversions import INIT_METHOD_PARAM_CONVERSIONS, PARAM_CONVERSIONS, boolean_conversion
 from results_scripts.utils import name_to_path
 
 
@@ -382,6 +382,31 @@ def load_init_method_runs(
             for run in runs
         ]
     )
+
+    def _make_resilient_converter(
+        conversion_fn: typing.Callable[[typing.Any], typing.Any],
+    ) -> typing.Callable[[typing.Any], typing.Any]:
+        def converter(value: typing.Any) -> typing.Any:
+            if (
+                value is None
+                or (isinstance(value, float) and value != value)  # NaN check
+                or (isinstance(value, str) and value.lower() == "none")
+            ):
+                return conversion_fn(None)
+            return conversion_fn(value)
+
+        return converter
+
+    for column_name, conversion_fn in INIT_METHOD_PARAM_CONVERSIONS.items():
+        if column_name in runs_dataframe.columns:
+            try:
+                runs_dataframe[column_name] = runs_dataframe[column_name].apply(
+                    _make_resilient_converter(conversion_fn)
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to convert column '{column_name}' using {conversion_fn}: {e}"
+                ) from e
 
     return RunsInfo(
         df=runs_dataframe, param_names=param_names, metric_names=metric_names
