@@ -30,6 +30,10 @@ class DenseInitConfig(SerializableConfig):
     # for adaptive sampling, increasing it, ignores progressively more color differences, reducing the probabilty for sampling similar points.
     color_dist_thresh: float = 0.01
 
+    # if True, include other (likely SfM) point cloud data available in the dataset for initialization.
+    # This is only supported for datasets that provide dense points via dense_points3D_path, not by overriding the point data.
+    include_sparse: bool = False
+
 
 @dataclass
 class NanoGSConfig(SerializableConfig):
