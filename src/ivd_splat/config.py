@@ -81,6 +81,8 @@ class InitConfig(SerializableConfig):
     # If set, will scale the scales calculated from knn such that the median matches this value.
     # This is done before applying the scale_mult multiplier.
     target_median_scale: Optional[float] = None
+    # TODO: description
+    scale_color_dist_factor: Optional[float] = None
 
 
 @dataclass

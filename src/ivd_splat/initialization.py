@@ -50,7 +50,7 @@ def default_init_opacities(
 
 
 def default_init_scales(
-    means: torch.Tensor, scene_scale: float, config: Config
+    means: torch.Tensor, rgbs: torch.Tensor, scene_scale: float, config: Config
 ) -> torch.Tensor:
     dist_avg = (knn(means, 3)[0]).mean(dim=-1)  # [N,]
     if config.init.target_median_scale is not None:
@@ -65,6 +65,32 @@ def default_init_scales(
         logging.info("Multiplier: %f", config.init.target_median_scale / median_dist)
         logging.info(
             f"Stats after: median: {dist_avg.median().item()}, mean: {dist_avg.mean().item()}, min: {dist_avg.min().item()}, max: {dist_avg.max().item()}"
+        )
+
+    if config.init.scale_color_dist_factor is not None:
+        logging.info(
+            f"Scaling scales by color dists with factor {config.init.scale_color_dist_factor}."
+        )
+        knn_10_indices = knn(means, 10)[1]  # [N, K]
+        avg_color_dist = torch.sqrt(
+            ((rgbs.unsqueeze(1) - rgbs[knn_10_indices]) ** 2).sum(dim=-1).mean(dim=-1)
+        )  # [N,]
+        avg_color_dist = torch.clamp(
+            avg_color_dist,
+            min=torch.quantile(avg_color_dist, 0.05),
+            max=torch.quantile(avg_color_dist, 0.9),
+        )
+        avg_color_dist = (avg_color_dist - avg_color_dist.min()) / (
+            avg_color_dist.max() - avg_color_dist.min() + 1e-8
+        ) * 2 - 1  # normalize to [-1, 1]
+        avg_color_dist = torch.clamp(
+            avg_color_dist,
+            min=-1 + 0.1,
+            max=1 - 0.1,
+        )
+        dist_avg = dist_avg * (1 - avg_color_dist * config.init.scale_color_dist_factor)
+        logging.info(
+            f"Stats after color distance scaling: median: {dist_avg.median().item()}, mean: {dist_avg.mean().item()}, min: {dist_avg.min().item()}, max: {dist_avg.max().item()}"
         )
 
     scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
@@ -380,7 +406,7 @@ def point_cloud_init(
 
     N = points.shape[0]
 
-    scales = default_init_scales(points, scene_scale, config)  # [N, 3]
+    scales = default_init_scales(points, rgbs, scene_scale, config)  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
 
     return InitResult(
