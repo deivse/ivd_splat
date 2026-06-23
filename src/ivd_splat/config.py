@@ -78,6 +78,10 @@ class InitConfig(SerializableConfig):
     # For normal initialization, scale along small axis is set to normal_init_small_axis_scale * scale_mult * avg_knn_distance
     normal_init_small_axis_scale: float = 0.2
 
+    # If set, will scale the scales calculated from knn such that the median matches this value.
+    # This is done before applying the scale_mult multiplier.
+    target_median_scale: Optional[float] = None
+
 
 @dataclass
 class RandomInitConfig(SerializableConfig):
