@@ -107,7 +107,7 @@ function run_practical_init_methods_with_ablations {
     done
 }
 
-function run_practical_init_methods_no_ablations {
+function run_practical_init_methods_no_ablations_no_da3_splat {
     local datasets=$1
     local init_methods=$2
     local extra_config=$(prepend_space_if_set "$3")
@@ -116,13 +116,24 @@ function run_practical_init_methods_no_ablations {
         if [ "$init_method" == "da3" ]; then
             # DA3 with floater removal
             train_strat_with_practical_init_method $init_method "$datasets" "floater_removal=True" "$extra_config"
-            # DA3 with splat init
-            train_strat_with_practical_init_method $init_method "$datasets" \
-                                                "output_gaussians=True_max_num_images=150" \
-                                                "splat_init.increase_scale_with_fewer_splats=False$extra_config"
         else
             # No DA3 without floater removal, that's our default config for eval iters > 0
             train_strat_with_practical_init_method $init_method "$datasets" "default" "$extra_config"
         fi
     done
+}
+
+
+function run_practical_init_methods_no_ablations {
+    local datasets=$1
+    local init_methods=$2
+    local extra_config=$(prepend_space_if_set "$3")
+    local extra_config_no_space=$3
+
+    run_practical_init_methods_no_ablations_no_da3_splat "$datasets" "$init_methods" "$extra_config_no_space"
+
+    # DA3 with splat init
+    train_strat_with_practical_init_method $init_method "$datasets" \
+                                           "output_gaussians=True_max_num_images=150" \
+                                           "splat_init.increase_scale_with_fewer_splats=False$extra_config"
 }
