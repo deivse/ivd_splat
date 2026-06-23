@@ -53,6 +53,20 @@ def default_init_scales(
     means: torch.Tensor, scene_scale: float, config: Config
 ) -> torch.Tensor:
     dist_avg = (knn(means, 3)[0]).mean(dim=-1)  # [N,]
+    if config.init.target_median_scale is not None:
+        logging.info(
+            f"Scaling scales such that median scale is {config.init.target_median_scale}."
+        )
+        median_dist = torch.median(dist_avg)
+        logging.info(
+            f"Stats before: median: {median_dist.item()}, mean: {dist_avg.mean().item()}, min: {dist_avg.min().item()}, max: {dist_avg.max().item()}"
+        )
+        dist_avg = dist_avg * (config.init.target_median_scale / median_dist)
+        logging.info("Multiplier: %f", config.init.target_median_scale / median_dist)
+        logging.info(
+            f"Stats after: median: {dist_avg.median().item()}, mean: {dist_avg.mean().item()}, min: {dist_avg.min().item()}, max: {dist_avg.max().item()}"
+        )
+
     scales = (dist_avg * config.init.scale_mult).unsqueeze(-1).repeat(1, 3)  # [N, 3]
     if config.init.clamp_scales:
         scales = torch.clamp(scales, max=scene_scale / 100)
