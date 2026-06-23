@@ -90,7 +90,7 @@ function run_practical_init_methods_with_ablations {
     local extra_config=$(prepend_space_if_set "$3")
 
     for init_method in $init_methods; do
-            train_strat_with_practical_init_method $init_method "$datasets"
+            train_strat_with_practical_init_method $init_method "$datasets" "default" "$extra_config"
             
             # EDGS with full SH init
             if [ "$init_method" == "edgs" ]; then
@@ -122,7 +122,7 @@ function run_practical_init_methods_no_ablations {
                                                 "splat_init.increase_scale_with_fewer_splats=False$extra_config"
         else
             # No DA3 without floater removal, that's our default config for eval iters > 0
-            train_strat_with_practical_init_method $init_method "$datasets" "$extra_config"
+            train_strat_with_practical_init_method $init_method "$datasets" "default" "$extra_config"
         fi
     done
 }
