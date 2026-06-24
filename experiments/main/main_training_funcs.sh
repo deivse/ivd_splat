@@ -133,7 +133,7 @@ function run_practical_init_methods_no_ablations {
     run_practical_init_methods_no_ablations_no_da3_splat "$datasets" "$init_methods" "$extra_config_no_space"
 
     # DA3 with splat init
-    train_strat_with_practical_init_method $init_method "$datasets" \
+    train_strat_with_practical_init_method da3 "$datasets" \
                                            "output_gaussians=True_max_num_images=150" \
                                            "splat_init.increase_scale_with_fewer_splats=False$extra_config"
 }
