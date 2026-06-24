@@ -12,7 +12,7 @@ from .default_without_adc import DefaultWithoutADCStrategy
 from .default_with_gaussian_cap import DefaultWithGaussianCapStrategy
 from .idhfr import IDHFRStrategy
 from .mcmc import MCMCStrategy
-from .mcmc_mod import MCMCModStrategy
+from .biased_mcmc import BiasedMCMCStrategy
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ ALL_STRATEGY_CLASSES = [
     IDHFRStrategy,
     INRIAStrategy,
     RevDGSStrategy,
-    MCMCModStrategy,
+    BiasedMCMCStrategy,
     *ADDITIONAL_STRATEGY_CLASSES,
 ]
 
@@ -65,5 +65,5 @@ __all__ = [
     "IDHFRStrategy",
     "INRIAStrategy",
     "RevDGSStrategy",
-    "MCMCModStrategy",
+    "BiasedMCMCStrategy",
 ] + [cls.__name__ for cls in ADDITIONAL_STRATEGY_CLASSES]
