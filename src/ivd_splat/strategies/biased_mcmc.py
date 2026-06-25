@@ -308,12 +308,11 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
             strategy_state["err_contrib_accum"] = get_error_contrib_accummulator(
                 self.revdgs_accum_mode
             )
-            strategy_state = {
-                **strategy_state,
-                **strategy_state["err_contrib_accum"].initialize(
-                    strategy_state, num_splats
-                ),
-            }
+            strategy_state.update(
+                strategy_state["err_contrib_accum"].initialize(
+                    num_splats, device=splat_params["means"].device
+                )
+            )
         return strategy_state["extra_signals"]
 
     def get_additional_loss_term(self, args: IVDSplatBaseStrategy.AdditionalLossArgs):
@@ -369,7 +368,7 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
                 state["err_contrib_accum"].update(
                     state,
                     state["extra_signals"].grad.squeeze(),
-                    is_visible=(info["radii"] > 0.0).all(dim=-1),
+                    is_visible=(info["radii"] > 0.0).all(dim=-1).squeeze(),
                 )
                 state["extra_signals"].grad.zero_()
 
