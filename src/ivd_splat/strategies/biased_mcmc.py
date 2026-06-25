@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import typing
-from typing import Any, Dict, Union
+from typing import Any, Dict, Literal, Union
 
 from torch import Tensor
 import torch
@@ -15,6 +15,7 @@ from gsplat.strategy.ops import (
 from ivd_splat.datasets.colmap import Dataset
 from ivd_splat.strategies.base import IVDSplatBaseStrategy
 from ivd_splat.strategies.revdgs import fused_ssim_no_mean
+from ivd_splat.utils.runner_utils import rgb_to_sh
 
 
 @torch.no_grad()
@@ -130,6 +131,121 @@ class NonSplatStateTensor:
     value: Tensor
 
 
+class ErrorContribAccumMax:
+    @staticmethod
+    def initialize(n_gaussians: int, device: torch.device) -> dict[str, Tensor]:
+        return {
+            "accum_error_contribs": torch.full(
+                (n_gaussians,),
+                -torch.finfo(torch.float32).max,
+                dtype=torch.float32,
+                device=device,
+            )
+        }
+
+    @staticmethod
+    def update(state: dict[str, Tensor], error_contribs: Tensor, *args, **kwargs):
+        state["accum_error_contribs"] = torch.max(
+            state["accum_error_contribs"], error_contribs
+        )
+
+    @staticmethod
+    def reset(state: dict[str, Tensor], n_gaussians: int):
+        state["accum_error_contribs"] = torch.full(
+            (n_gaussians,),
+            -torch.finfo(torch.float32).max,
+            dtype=torch.float32,
+            device=state["accum_error_contribs"].device,
+        )
+
+    @staticmethod
+    def get(state: dict[str, Tensor]) -> Tensor:
+        return state["accum_error_contribs"]
+
+
+class ErrorContribAccumMean:
+    @staticmethod
+    def initialize(n_gaussians: int, device: torch.device) -> dict[str, Any]:
+        return {
+            "accum_error_contribs": torch.zeros(
+                (n_gaussians,), dtype=torch.float32, device=device
+            ),
+            "count": 0,
+        }
+
+    @staticmethod
+    def update(state: dict[str, Tensor], error_contribs: Tensor, *args, **kwargs):
+        state["accum_error_contribs"] += error_contribs
+        state["count"] += 1
+
+    @staticmethod
+    def reset(state: dict[str, Tensor], n_gaussians: int):
+        state["accum_error_contribs"] = torch.zeros(
+            (n_gaussians,),
+            dtype=torch.float32,
+            device=state["accum_error_contribs"].device,
+        )
+        state["count"] = 0
+
+    @staticmethod
+    def get(state: dict[str, Tensor]) -> Tensor:
+        return state["accum_error_contribs"] / max(state["count"], 1)
+
+
+class ErrorContribAccumMeanVisible:
+    @staticmethod
+    def initialize(n_gaussians: int, device: torch.device) -> dict[str, Tensor]:
+        return {
+            "accum_error_contribs": torch.zeros(
+                (n_gaussians,), dtype=torch.float32, device=device
+            ),
+            "count": torch.zeros((n_gaussians,), dtype=torch.float32, device=device),
+        }
+
+    @staticmethod
+    def update(state: dict[str, Tensor], error_contribs: Tensor, *, is_visible: Tensor):
+        state["accum_error_contribs"] += error_contribs * is_visible
+        state["count"] += is_visible
+
+    @staticmethod
+    def reset(state: dict[str, Tensor], n_gaussians: int):
+        state["accum_error_contribs"] = torch.zeros(
+            (n_gaussians,),
+            dtype=torch.float32,
+            device=state["accum_error_contribs"].device,
+        )
+        state["count"] = torch.zeros(
+            (n_gaussians,), dtype=torch.float32, device=state["count"].device
+        )
+
+    @staticmethod
+    def get(state: dict[str, Tensor]) -> Tensor:
+        return state["accum_error_contribs"] / state["count"].clamp_min(1)
+
+
+class ErrorContribAccumMeanVisibleK(ErrorContribAccumMeanVisible):
+    K = 2
+
+    @staticmethod
+    def get(state: dict[str, Tensor]) -> Tensor:
+        return state["accum_error_contribs"] / state["count"].clamp_min(
+            ErrorContribAccumMeanVisibleK.K
+        )
+
+
+def get_error_contrib_accummulator(mode: str):
+    if mode == "max":
+        return ErrorContribAccumMax
+    elif mode == "mean":
+        return ErrorContribAccumMean
+    elif mode == "mean_visible":
+        return ErrorContribAccumMeanVisible
+    elif mode == "mean_visible_k":
+        return ErrorContribAccumMeanVisibleK
+    else:
+        raise ValueError(f"Invalid revdgs_accum_mode: {mode}")
+
+
 @dataclass
 class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
     CONFIG_SERIALIZATION_IGNORED_FIELDS: typing.ClassVar[set[str]] = {
@@ -142,12 +258,26 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
     key_for_gradient: str = "means2d"
     absgrad: bool = True
     revdgs_mode: bool = False
-    prob_scaler_weight: float = 0.5
+    revdgs_accum_mode: Literal["max", "mean", "mean_visible", "mean_visible_k"] = (
+        "mean_visible_k"
+    )
+    prob_scaler_weight: float = 0.25
+    debug_export_every: int = -1
 
     def get_cap_max(self):
         if self.cap_max == -1:
             return None
         return self.cap_max
+
+    def check_sanity(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+    ):
+        super().check_sanity(params, optimizers)
+        assert (
+            self.prob_scaler_weight >= 0.0 and self.prob_scaler_weight <= 1.0
+        ), "prob_scaler_weight must be in [0, 1]"
 
     def initialize_state(self, scene_scale: float, _: Dataset) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
@@ -175,12 +305,15 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
             strategy_state["extra_signals"] = torch.zeros(
                 (num_splats, 1), device=splat_params["means"].device, requires_grad=True
             )
-            strategy_state["max_error_contribs"] = torch.full(
-                (num_splats,),
-                -torch.finfo(torch.float32).max,
-                dtype=torch.float32,
-                device=splat_params["means"].device,
+            strategy_state["err_contrib_accum"] = get_error_contrib_accummulator(
+                self.revdgs_accum_mode
             )
+            strategy_state = {
+                **strategy_state,
+                **strategy_state["err_contrib_accum"].initialize(
+                    strategy_state, num_splats
+                ),
+            }
         return strategy_state["extra_signals"]
 
     def get_additional_loss_term(self, args: IVDSplatBaseStrategy.AdditionalLossArgs):
@@ -233,8 +366,10 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
             self._update_state(params, state, info, packed=packed)
             if self.revdgs_mode:
                 # Update error contribs
-                state["max_error_contribs"] = torch.max(
-                    state["max_error_contribs"], state["extra_signals"].grad.squeeze()
+                state["err_contrib_accum"].update(
+                    state,
+                    state["extra_signals"].grad.squeeze(),
+                    is_visible=(info["radii"] > 0.0).all(dim=-1),
                 )
                 state["extra_signals"].grad.zero_()
 
@@ -244,7 +379,7 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state, step)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
@@ -260,13 +395,8 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
 
             if self.revdgs_mode:
                 state["extra_signals"].requires_grad_(True)
-                # Reset max error contribs
-                state["max_error_contribs"] = torch.full(
-                    (params["means"].shape[0],),
-                    -torch.finfo(torch.float32).max,
-                    dtype=torch.float32,
-                    device=params["means"].device,
-                )
+                # Reset error contribs
+                state["err_contrib_accum"].reset(state, len(params["means"]))
 
         # add noise to GSs (stop after noise_injection_stop_iter if set)
         noise_stop = (
@@ -297,6 +427,7 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
         state: Dict[str, Any],
+        step: int,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
@@ -311,13 +442,39 @@ class BiasedMCMCStrategy(GSplatMCMCStrategy, IVDSplatBaseStrategy):
             count = state["count"]
             prob_scaler = state["grad2d"] / count.clamp_min(1)
         else:
-            prob_scaler = state["max_error_contribs"]
+            prob_scaler = state["err_contrib_accum"].get(state)
 
         prob_scaler_norm = prob_scaler / prob_scaler.max().clamp_min(1e-6)
         probs = (
             probs_base * (1 - self.prob_scaler_weight)
             + probs_base * prob_scaler_norm * self.prob_scaler_weight
         )
+
+        if self.debug_export_every != -1 and step % self.debug_export_every == 0:
+            # export gaussians colored by probabilities
+
+            from matplotlib import cm
+            from shared.splat_ply_io import export_splat_ply, SplatData
+
+            values = probs.cpu().numpy()
+            colors = torch.from_numpy(
+                cm.magma(values / (values.max() + 1e-8))[:, :3]
+            ).to(
+                device=params["sh0"].device,
+                dtype=params["sh0"].dtype,
+            )
+
+            export_splat_ply(
+                f"relocation_probs_{step}.ply",
+                SplatData(
+                    means=params["means"].detach().cpu(),
+                    scales=params["scales"].detach().cpu(),
+                    quats=params["quats"].detach().cpu(),
+                    opacities=params["opacities"].detach().cpu(),
+                    sh0=rgb_to_sh(colors).unsqueeze(1).detach().cpu(),
+                    shN=torch.zeros_like(params["shN"]).detach().cpu(),
+                ),
+            )
 
         relocate_custom_probs(
             params=params,
