@@ -45,7 +45,6 @@ def write_proxy_dataset_to_disk(
         "id": id,
         "scene": scene,
         "original_dataset": original_dataset_str,
-        "ivd_splat_dense_init": True,
     }
 
     path.mkdir(parents=True, exist_ok=True)
@@ -77,10 +76,11 @@ def monodepth_proxy_dataset_loader(
         **kwargs,
     )
 
-    pts, rgbs = load_pointcloud_ply(path / POINTS_FILE_NAME)
-    if rgbs is None:
-        raise RuntimeError("Proxy dataset pointcloud does not contain colors.")
-    dataset["points3D_xyz"] = pts
-    dataset["points3D_rgb"] = rgbs * 255.0  # convert back to [0,255] range for consistency with other datasets
+    if not (path / POINTS_FILE_NAME).exists():
+        raise RuntimeError(
+            f"Proxy dataset at {path} does not contain {POINTS_FILE_NAME}."
+        )
 
+    dataset["metadata"]["dense_points3D_path"] = str(path / POINTS_FILE_NAME)
+    
     return dataset
