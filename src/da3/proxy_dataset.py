@@ -175,7 +175,6 @@ def write_proxy_dataset_to_disk(
         "id": id,
         "scene": scene,
         "original_dataset": original_dataset_str,
-        "ivd_splat_dense_init": True,
     }
 
     path = config.output_dir
@@ -215,12 +214,7 @@ def da3_proxy_dataset_loader(
 
     at_least_one = False
     if (path / POINTS_FILE_NAME).exists():
-        # Or replace SfM points for compatibility with existing methods
-        pts, rgbs = load_pointcloud_ply(path / POINTS_FILE_NAME)
-        if rgbs is None:
-            raise RuntimeError("Proxy dataset pointcloud does not contain colors.")
-        dataset["points3D_xyz"] = pts
-        dataset["points3D_rgb"] = rgbs * 255.0
+        dataset["metadata"]["dense_points3D_path"] = str(path / POINTS_FILE_NAME)
         at_least_one = True
     if (path / SPLATS_FILE_NAME).exists():
         dataset["metadata"]["ivd_splat_splat_init_path"] = str(path / SPLATS_FILE_NAME)
