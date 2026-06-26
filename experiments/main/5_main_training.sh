@@ -63,6 +63,7 @@ for strategy in $ALL_STRATEGIES; do
     # Datasets without laser scan data, so just monodepth and EDGS.
     run_practical_init_methods_with_ablations "$OTHER_DATASETS" "monodepth edgs da3"
 
+    ## Include sparse
     # First for datasets where we have laser scan data
     run_practical_init_methods_no_ablations_no_da3_splat "$GT_DATASETS_EXCEPT_ETH3D" "monodepth da3 laser_scan" "dense_init.include_sparse={True}"
     # Datasets without laser scan data, so just monodepth and EDGS.

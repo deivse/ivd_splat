@@ -39,8 +39,9 @@ function train_strat_with_sfm {
 function train_strat_with_laser_scan {
     local init_size_per_scene_file=$1
     local extra_config=$(prepend_space_if_set "$2")
+    local datasets=${3:-$GT_DATASETS}
 
-    ivd_splat_runner --datasets $GT_DATASETS \
+    ivd_splat_runner --datasets $datasets \
         --method ivd-splat \
         --init_method laser_scan \
         --output-dir $RESULTS_DIR \
