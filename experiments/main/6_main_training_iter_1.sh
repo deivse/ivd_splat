@@ -39,6 +39,13 @@ for strategy in $ALL_STRATEGIES; do
     ## Init size == G_max
     train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE
 
+    ## With include sparse (no eth3d, as it doesn't help there)
+    train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        "dense_init.include_sparse={True}" \
+        "$GT_DATASETS_EXCEPT_ETH3D"
+    train_strat_with_laser_scan $FINAL_NUM_POINTS_PER_SCENE_FILE \
+        "dense_init.include_sparse={True} dense_init.target_points_fraction={$INIT_FRACTIONS}" \
+        "$GT_DATASETS_EXCEPT_ETH3D"
 
     if [ "$strategy" != "DefaultWithoutADCStrategy" ]; then
         ############### Laser Scan + Noise ###############
@@ -59,4 +66,6 @@ for strategy in $ALL_STRATEGIES; do
     run_practical_init_methods_no_ablations "$GT_DATASETS_EXCEPT_ETH3D" "monodepth edgs da3 laser_scan"
     # Datasets without laser scan data, so just monodepth, EDGS and DA3.
     run_practical_init_methods_no_ablations "$OTHER_DATASETS" "monodepth edgs da3"
+
+    # TODO: With sparse?
 done
