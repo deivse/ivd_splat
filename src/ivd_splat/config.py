@@ -102,6 +102,13 @@ class SplatInitConfig(SerializableConfig):
     # densification created a lot of useless splats at the start instead of growing them.
     increase_scale_with_fewer_splats: bool = True
 
+    opacity_uniform_override: Optional[float] = None
+    opacity_noise_std: Optional[float] = None
+    init_scale_with_knn: bool = False
+    scale_noise_std_wrt_median: Optional[float] = None
+    rotation_noise_angle_std_deg: Optional[float] = None
+    color_noise_std: Optional[float] = None
+
 
 @dataclass
 class Config(SerializableConfig):

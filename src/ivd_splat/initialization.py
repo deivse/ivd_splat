@@ -9,7 +9,7 @@ from ivd_splat.datasets.colmap import Parser
 from ivd_splat.datasets.normalize import transform_points
 from ivd_splat.nerfbaselines_integration.parser import NerfbaselinesParser
 from ivd_splat.utils.large_tensor_quantile import large_tensor_quantile
-from ivd_splat.utils.runner_utils import knn, rgb_to_sh
+from ivd_splat.utils.runner_utils import knn, rgb_to_sh, sh_to_rgb
 
 from shared.point_cloud_io import load_pointcloud_ply
 from shared.splat_ply_io import SplatData, load_splat_ply
@@ -46,7 +46,11 @@ def default_init_shN(
 def default_init_opacities(
     num_splats: int, device: torch.device, config: Config
 ) -> torch.Tensor:
-    return torch.logit(torch.full((num_splats,), config.init.opacity, device=device))
+    return torch.full(
+        (num_splats,),
+        torch.logit(torch.tensor(config.init.opacity)).item(),
+        device=device,
+    )
 
 
 def default_init_scales(
@@ -473,7 +477,85 @@ def rotate_quaternions(quats, rotation_matrix):
     return o3.compose_quaternion(rot_quat, quats)
 
 
-def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> SplatData:
+def random_offset_quaternions(n: int, rotation_angle_std_deg: float) -> torch.Tensor:
+    axis = torch.rand(n, 3)
+    magnitude = torch.abs(torch.randn(n)) * rotation_angle_std_deg * (np.pi / 180.0)
+
+    quats = o3.axis_angle_to_quaternion(axis, magnitude)
+    quats = quats / torch.norm(quats, dim=-1, keepdim=True)
+    return quats
+
+
+def _apply_splat_init_ablations_in_place(
+    splat: SplatData, config: Config, scene_scale: float
+) -> None:
+    # opacity_uniform_override: Optional[float] = None
+    # opacity_noise_std: Optional[float] = None
+    # init_scale_with_knn: bool = False
+    # scale_noise_std: Optional[float] = None
+    # rotation_noise_std: Optional[float] = None
+    # color_noise_std: Optional[float] = None
+
+    if config.splat_init.opacity_uniform_override is not None:
+        _LOGGER.info(
+            f"Overriding splat opacities with uniform value {config.splat_init.opacity_uniform_override}."
+        )
+        splat.opacities = torch.full_like(
+            splat.opacities,
+            torch.logit(
+                torch.tensor(config.splat_init.opacity_uniform_override)
+            ).item(),
+        )
+    if config.splat_init.opacity_noise_std is not None:
+        _LOGGER.info(
+            f"Adding noise to splat opacities with std {config.splat_init.opacity_noise_std}."
+        )
+        noise = torch.randn_like(splat.opacities) * config.splat_init.opacity_noise_std
+        splat.opacities = torch.logit(
+            torch.clamp(torch.sigmoid(splat.opacities) + noise, 0.0, 1.0)
+        )
+    if config.splat_init.init_scale_with_knn:
+        _LOGGER.info("Overriding splat scales with default kNN-based scales init.")
+        splat.scales = default_init_scales(
+            splat.means, sh_to_rgb(splat.sh0.squeeze(1)), scene_scale, config
+        ).to(splat.scales)
+    if config.splat_init.scale_noise_std_wrt_median is not None:
+        _LOGGER.info(
+            f"Adding noise to splat scales with std {config.splat_init.scale_noise_std_wrt_median}."
+        )
+        median_scale = torch.median(torch.exp(splat.scales))
+        noise = (
+            torch.randn_like(splat.scales)
+            + config.splat_init.scale_noise_std_wrt_median * median_scale
+        )
+        splat.scales = torch.log(
+            torch.clamp(torch.exp(splat.scales) + noise, 1e-6, None)
+        )
+    if config.splat_init.rotation_noise_angle_std_deg is not None:
+        _LOGGER.info(
+            f"Adding noise to splat rotations with std {config.splat_init.rotation_noise_angle_std_deg}."
+        )
+        splat.quats = o3.compose_quaternion(
+            splat.quats,
+            random_offset_quaternions(
+                splat.quats.shape[0], config.splat_init.rotation_noise_angle_std_deg
+            ),
+        )
+    if config.splat_init.color_noise_std is not None:
+        _LOGGER.info(
+            f"Adding noise to splat colors with std {config.splat_init.color_noise_std}."
+        )
+        if splat.shN.max() > 0:
+            raise NotImplementedError(
+                "Adding color noise to higher-order SH coefficients is not implemented."
+            )
+        rgbs = sh_to_rgb(splat.sh0.squeeze(1))
+        noise = torch.randn_like(rgbs) * config.splat_init.color_noise_std
+        new_rgbs = torch.clamp(rgbs + noise, 0.0, 1.0)
+        splat.sh0 = rgb_to_sh(new_rgbs).unsqueeze(1)
+
+
+def splat_init(config: Config, parser: Parser) -> SplatData:
     if not isinstance(parser, NerfbaselinesParser):
         raise RuntimeError(
             "Init with pre-made splat currently requires NerfbaselinesParser."
@@ -500,5 +582,7 @@ def load_splat_from_nerfbaselines_parser(config: Config, parser: Parser) -> Spla
 
     splat.shN = transform_shs(splat.shN, rot_torch)
     splat.quats = rotate_quaternions(splat.quats, rot_torch)
+
+    _apply_splat_init_ablations_in_place(splat, config, parser.scene_scale)
 
     return splat

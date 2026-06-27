@@ -152,6 +152,10 @@ def rgb_to_sh(rgb: Tensor) -> Tensor:
     C0 = 0.28209479177387814
     return (rgb - 0.5) / C0
 
+def sh_to_rgb(sh: Tensor) -> Tensor:
+    C0 = 0.28209479177387814
+    return sh * C0 + 0.5
+
 
 def set_random_seed(seed: int):
     random.seed(seed)
