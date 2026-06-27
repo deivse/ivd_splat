@@ -29,6 +29,14 @@ function da3_splat_init() {
 }
 
 for strategy in $EXTRA_PRACTICAL_EVAL_STRATEGIES; do
+    ## Include sparse
+    # First for datasets where we have laser scan data
+    run_practical_init_methods_no_ablations_no_da3_splat "$GT_DATASETS_EXCEPT_ETH3D" "monodepth da3 laser_scan" "dense_init.include_sparse={True}"
+    # Datasets without laser scan data, so just monodepth and EDGS.
+    run_practical_init_methods_no_ablations_no_da3_splat "$OTHER_DATASETS" "monodepth da3" "dense_init.include_sparse={True}"
+done
+
+for strategy in $EXTRA_PRACTICAL_EVAL_STRATEGIES; do
     echo "Training with strategy: $strategy"
     
     da3_splat_init "splat_init.init_scale_with_knn=True"
