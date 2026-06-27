@@ -12,7 +12,7 @@ from ivd_splat.initialization import (
     RawInitData,
     get_point_data_from_parser,
     point_cloud_init,
-    load_splat_from_nerfbaselines_parser,
+    splat_init,
 )
 import numpy as np
 import torch
@@ -88,8 +88,8 @@ def create_splats_with_optimizers(
 
         init_splat_data = point_cloud_init(raw_init_data, config, scene_scale)
     elif config.init_type == "splat":
-        # Parser type check performed inside load_splat_from_nerfbaselines_parser
-        init_splat_data = load_splat_from_nerfbaselines_parser(config, parser)
+        # Parser type check performed inside splat_init
+        init_splat_data = splat_init(config, parser)
     else:
         raise NotImplementedError(f"Unknown init_type: {config.init_type}")
 
