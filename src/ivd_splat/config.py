@@ -105,6 +105,7 @@ class SplatInitConfig(SerializableConfig):
     opacity_uniform_override: Optional[float] = None
     opacity_noise_std: Optional[float] = None
     init_scale_with_knn: bool = False
+    init_scale_isotropic_mean: bool = False
     scale_noise_std_wrt_median: Optional[float] = None
     rotation_noise_angle_std_deg: Optional[float] = None
     color_noise_std: Optional[float] = None

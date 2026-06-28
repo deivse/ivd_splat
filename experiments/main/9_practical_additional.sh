@@ -40,6 +40,7 @@ for strategy in $EXTRA_PRACTICAL_EVAL_STRATEGIES; do
     echo "Training with strategy: $strategy"
     
     da3_splat_init "splat_init.init_scale_with_knn=True"
+    da3_splat_init "splat_init.init_scale_isotropic_mean=True"
     da3_splat_init "splat_init.opacity_uniform_override=0.1"
     da3_splat_init "splat_init.rotation_noise_angle_std_deg=45"
     # da3_splat_init "splat_init.color_noise_std=0.25"
