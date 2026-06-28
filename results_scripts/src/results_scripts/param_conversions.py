@@ -51,6 +51,17 @@ PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
     "means_lr_final": defaulter("1.6000000000000001e-06"),
     "nanogs_simplify_iter": defaulter("-1"),
     "eval_iter": converter(int, default=0),
+    "dense_init.softmax_temp": defaulter("0.0001"),
+    "dense_init.color_dist_thresh": defaulter("0.01"),
+    "dense_init.include_sparse": boolean_conversion(default=False),
+    "init.target_median_scale": defaulter(None),
+    "init.scale_color_dist_factor": defaulter(None),
+    "splat_init.opacity_uniform_override": defaulter(None),
+    "splat_init.opacity_noise_std": defaulter(None),
+    "splat_init.init_scale_with_knn": defaulter(False),
+    "splat_init.scale_noise_std_wrt_median": defaulter(None),
+    "splat_init.rotation_noise_angle_std_deg": defaulter(None),
+    "splat_init.color_noise_std": defaulter(None),
 }
 
 INIT_METHOD_PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {

@@ -146,7 +146,7 @@ def make_latex_table_for_metrics(
     if row_order is not None:
         if set(row_order) != set(data.keys()):
             raise ValueError(
-                "row_order must contain the same elements as the data keys."
+                f"row_order must contain the same elements as the data keys: {set(data.keys())}, but got {set(row_order)}"
             )
         row_labels = row_order
     else:
