@@ -489,13 +489,6 @@ def random_offset_quaternions(n: int, rotation_angle_std_deg: float) -> torch.Te
 def _apply_splat_init_ablations_in_place(
     splat: SplatData, config: Config, scene_scale: float
 ) -> None:
-    # opacity_uniform_override: Optional[float] = None
-    # opacity_noise_std: Optional[float] = None
-    # init_scale_with_knn: bool = False
-    # scale_noise_std: Optional[float] = None
-    # rotation_noise_std: Optional[float] = None
-    # color_noise_std: Optional[float] = None
-
     if config.splat_init.opacity_uniform_override is not None:
         _LOGGER.info(
             f"Overriding splat opacities with uniform value {config.splat_init.opacity_uniform_override}."
@@ -519,6 +512,10 @@ def _apply_splat_init_ablations_in_place(
         splat.scales = default_init_scales(
             splat.means, sh_to_rgb(splat.sh0.squeeze(1)), scene_scale, config
         ).to(splat.scales)
+    if config.splat_init.init_scale_isotropic_mean:
+        _LOGGER.info("Overriding splat scales with isotropic mean of current scales.")
+        mean_scale = torch.mean(torch.exp(splat.scales), dim=1, keepdim=True)
+        splat.scales = torch.log(mean_scale.repeat(1, 3))
     if config.splat_init.scale_noise_std_wrt_median is not None:
         _LOGGER.info(
             f"Adding noise to splat scales with std {config.splat_init.scale_noise_std_wrt_median}."
