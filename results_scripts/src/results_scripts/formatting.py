@@ -64,11 +64,7 @@ class FormatOptions:
     def get_table_env(self) -> str:
         if self.table_env_override is not None:
             return self.table_env_override
-        if self.metrics_layout == MetricsLayout.horizontal:
-            return "table*"
-        if self.metrics_layout == MetricsLayout.vertical:
-            return "table"
-        raise ValueError(f"Invalid metrics layout: {self.metrics_layout}")
+        return "table"
 
 
 class CellData(typing.NamedTuple):

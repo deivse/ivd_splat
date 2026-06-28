@@ -16,7 +16,11 @@ from results_scripts.constants import (
     PER_SCENE_VARYING_PARAMS,
     get_default_strategy_args,
 )
-from results_scripts.param_conversions import INIT_METHOD_PARAM_CONVERSIONS, PARAM_CONVERSIONS, boolean_conversion
+from results_scripts.param_conversions import (
+    INIT_METHOD_PARAM_CONVERSIONS,
+    PARAM_CONVERSIONS,
+    boolean_conversion,
+)
 from results_scripts.utils import name_to_path
 
 
@@ -46,6 +50,13 @@ class RunsInfo:
             else:
                 # Copy to avoid potentially mutating self.df
                 filtered_runs = filtered_runs.copy()
+            if filtered_runs.empty:
+                logging.warning(
+                    "Filtered runs empty after filtering for parameter '%s' = %s.",
+                    param_name,
+                    param_value,
+                )
+                break
         return RunsInfo(
             df=filtered_runs,
             param_names=self.param_names,
@@ -535,6 +546,7 @@ def filter_and_tag_runs(
         "init_size_matches_real_init": boolean_conversion(default=False),
         "init_size_matches_gmax": boolean_conversion(default=False),
         "is_default_strategy_config": boolean_conversion(default=False),
+        "is_default_init_config": boolean_conversion(default=False),
     }
 
     def tag(df: pd.DataFrame, selection: pd.Series, tag_key: str, tag_value: str):
@@ -630,11 +642,37 @@ def filter_and_tag_runs(
                 "0",
             )
 
+    def col_or_nones(df: pd.DataFrame, col_name: str) -> pd.Series:
+        if col_name in df.columns:
+            return df[col_name]
+        else:
+            return pd.Series([None] * len(df), index=df.index)
+
+    is_default_init_config = (
+        (df["dense_init.sampling"] == "uniform")
+        & col_or_nones(df, "init.scale_color_dist_factor").isna()
+        & col_or_nones(df, "init.target_median_scale").isna()
+        & col_or_nones(df, "init.scale_color_dist_factor").isna()
+        & col_or_nones(df, "splat_init.opacity_uniform_override").isna()
+        & col_or_nones(df, "splat_init.opacity_noise_std").isna()
+        & col_or_nones(df, "splat_init.init_scale_with_knn")
+        .fillna(False)
+        .infer_objects(copy=False)
+        .eq(False)
+        & col_or_nones(df, "splat_init.scale_noise_std_wrt_median").isna()
+        & col_or_nones(df, "splat_init.rotation_noise_angle_std_deg").isna()
+        & col_or_nones(df, "splat_init.color_noise_std").isna()
+    )
+    tag(df, ~is_default_init_config, "is_default_init_config", "0")
+    tag(df, is_default_init_config, "is_default_init_config", "1")
+
     is_sfm_baseline = (
         df["init_method"].eq("sfm")
         & df["is_default_strategy_config"].eq(True)
         & df["gaussian_cap_fraction"].eq("1.0")
+        & df["is_default_init_config"].eq(True)
     )
+
     tag(df, is_sfm_baseline, "init_group", "sfm_baseline")
     tag(df, ~is_sfm_baseline, "init_group", "None")
     runs.df = df
@@ -668,9 +706,12 @@ def load_and_prepare_dataset_runs(
         "dense_init.knn_num_neighbors"
     ].replace("4", "3")
 
+    # legacy, steps_scaler was never used, but the default changed or smth
     params_to_remove = ["init_size_same_as_sfm", "steps_scaler"]
-    params_to_remove += ["gsplat_version"]
-    params_to_remove += ["random_seed"]
+    params_to_remove += ["gsplat_version"]  # identical across all used data for now
+    params_to_remove += ["random_seed"]  # correlates with eval_iter directly
+    # default changed, adaptive sampling not used anyways
+    params_to_remove += ["dense_init.knn_num_neighbors"]
     params_to_remove += [
         param for param in runs.param_names if param.startswith("nanogs_config.")
     ]

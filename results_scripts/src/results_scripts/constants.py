@@ -41,12 +41,17 @@ STRATEGY_NAMES = {
     "DefaultWithGaussianCapStrategy": "AbsGS",
     "INRIAStrategy": "INRIA",
     "MCMCStrategy": "MCMC",
+    "MCMCModStrategy": "MCMC Mod",
+    "BiasedMCMCStrategy": "Biased MCMC",
     "IDHFRStrategy": "IDHFR",
     "RevDGSStrategy": "RevDGS",
     "DefaultWithoutADCStrategy": "No D.",
 }
 
-ALL_STRATEGIES = list(STRATEGY_NAMES.keys())
+STRATEGIES_EXCLUDED_FROM_DEFAULT = ["BiasedMCMCStrategy", "MCMCModStrategy"]
+ALL_STRATEGIES = [
+    k for k in STRATEGY_NAMES.keys() if k not in STRATEGIES_EXCLUDED_FROM_DEFAULT
+]
 ALL_STRATEGIES_EXCEPT_NO_D = [
     strategy for strategy in ALL_STRATEGIES if strategy != "DefaultWithoutADCStrategy"
 ]
@@ -54,6 +59,7 @@ ALL_STRATEGIES_EXCEPT_NO_D = [
 COMMON_DEFAULT_ARGS = {
     "nanogs_simplify_iter": "-1",
     "means_lr_init": str(DEFAULT_MEANS_LR_INIT),
+    "dense_init.sampling": "uniform",
 }
 
 DEFAULT_STRATEGY_ARGS = {
@@ -69,6 +75,15 @@ DEFAULT_STRATEGY_ARGS = {
     "MCMCStrategy": {
         "strategy": "MCMCStrategy",
         "opacity_reg": "0.01",
+        "init.scale_mult": "0.1",
+        **COMMON_DEFAULT_ARGS,
+    },
+    "BiasedMCMCStrategy": {
+        "strategy": "BiasedMCMCStrategy",
+        **COMMON_DEFAULT_ARGS,
+    },
+    "MCMCModStrategy": {
+        "strategy": "MCMCModStrategy",
         **COMMON_DEFAULT_ARGS,
     },
     "IDHFRStrategy": {
