@@ -48,6 +48,7 @@ done
 
 for strategy in $EXTRA_PRACTICAL_EVAL_STRATEGIES; do
     echo "Training with strategy: $strategy"
-    run_practical_init_methods_no_ablations "$GT_DATASETS_EXCEPT_ETH3D" "monodepth da3 laser_scan" "dense_init.target_points_fraction={$EXTRA_PRACTICAL_INIT_FRACTIONS}"
+    run_practical_init_methods_no_ablations "$GT_DATASETS_EXCEPT_ETH3D" "monodepth da3" "dense_init.target_points_fraction={$EXTRA_PRACTICAL_INIT_FRACTIONS}"
+    run_practical_init_methods_no_ablations "$GT_DATASETS_EXCEPT_ETH3D" "laser_scan" "dense_init.include_sparse={True} dense_init.target_points_fraction={$EXTRA_PRACTICAL_INIT_FRACTIONS}"
     run_practical_init_methods_no_ablations "$OTHER_DATASETS" "monodepth da3" "dense_init.target_points_fraction={$EXTRA_PRACTICAL_INIT_FRACTIONS}"
 done
