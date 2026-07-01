@@ -1,26 +1,27 @@
 """
-Geometry accuracy evaluation for two DA3 initialization configs.
+Geometry accuracy evaluation for two or more DA3 initialization configs.
 
-Given two config strings (subfolder names under
-``<results_dir>/<scene>/<init_method>/<config>/``), this script:
+Given a list of ``init_method=config`` reconstructions (each config being a
+subfolder name under ``<results_dir>/<scene>/<init_method>/<config>/``), this
+script:
 
 1. For every scene (specified directly via ``--scenes`` or expanded from
-   ``--datasets``) loads the two point sets A and B produced by the two
-   configs. Each config output may be either a point cloud
-   (``da3_points.ply``) or gaussians (``da3_gaussians.ply``); the type is
-   detected from ``init_info.json``.
+   ``--datasets``) loads the point set produced by each reconstruction. Each
+   output may be either a point cloud (``da3_points.ply``) or gaussians
+   (``da3_gaussians.ply``); the type is detected from ``init_info.json``.
 2. Loads the sparse SfM points for the scene from the nerfbaselines dataset.
 3. Merges points that are closer to each other than a per-dataset configurable
-   voxel size (via Open3D voxel downsampling) for the SfM points, A and B.
-4. Computes geometry accuracy metrics from the merged point sets
-   (currently a placeholder returning an arbitrary set of named metrics).
+   voxel size (via Open3D voxel downsampling) for the SfM points and every
+   reconstruction.
+4. Computes geometry accuracy metrics from the merged point sets.
 5. Aggregates the metrics across all evaluated scenes.
 
 Example::
 
-    python da3_acc_eval/eval_geometry_accuracy.py \
-        --config-a max_num_images=60 \
-        --config-b max_num_images=60_conf_thresh_mult=2 \
+    python experiments/main/eval_da3_geometry_accuracy.py \
+        --init-methods da3=max_num_images=30 \
+                       da3=max_num_images=30_output_gaussians=True \
+                       monodepth=default \
         --datasets mipnerf360 \
         --results-dir results
 """
@@ -67,16 +68,46 @@ DISTANCE_PERCENTILE_CUTOFF = 90
 
 # Names of the point sets merged per scene. Used as keys internally and for logging.
 POINT_SET_SFM = "sfm"
-POINT_SET_A = "A"
-POINT_SET_B = "B"
+
+
+@dataclass
+class Reconstruction:
+    """A single reconstruction to evaluate: an init method + one of its configs."""
+
+    method: str
+    config: str
+
+    @property
+    def label(self) -> str:
+        """Unique, filename/JSON-safe identifier used in metric and file names."""
+        return f"{self.method}_{self.config}"
+
+
+def parse_reconstruction(spec: str) -> Reconstruction:
+    """
+    Parse an ``init_method=config`` spec. The config may itself contain ``=``, so
+    only the first ``=`` separates the method from the config, e.g.
+    ``da3=max_num_images=30`` -> method ``da3``, config ``max_num_images=30``.
+    """
+    if "=" not in spec:
+        raise ValueError(
+            f"Invalid --init-methods entry '{spec}'. Expected 'init_method=config'."
+        )
+    method, config = spec.split("=", 1)
+    method, config = method.strip(), config.strip()
+    if not method or not config:
+        raise ValueError(
+            f"Invalid --init-methods entry '{spec}'. Expected 'init_method=config'."
+        )
+    return Reconstruction(method=method, config=config)
 
 
 @dataclass
 class Args:
-    # Config string (subfolder name) for point set A.
-    config_a: str
-    # Config string (subfolder name) for point set B.
-    config_b: str
+    # Reconstructions to compare, each given as "init_method=config" (the config
+    # may itself contain '='). Example:
+    #   --init-methods da3=max_num_images=30 monodepth=default
+    init_methods: list[str]
 
     # Scenes to evaluate, in "dataset/scene" form or as local paths.
     # Takes precedence over --datasets when non-empty.
@@ -86,8 +117,6 @@ class Args:
 
     # Base results directory containing the init method outputs.
     results_dir: Path = Path("results")
-    # Initialization method name (subfolder under the scene directory).
-    init_method: str = "da3"
 
     # Per-dataset voxel size, mapping dataset id -> voxel size. Applied in the
     # normalized scene coordinate frame (see scene normalization below).
@@ -99,8 +128,8 @@ class Args:
     # Output JSON file for per-scene and aggregated metrics.
     output: Path = Path("da3_geometry_accuracy.json")
 
-    # If set, export the merged point sets (SfM, A, B) per scene as PLY files
-    # into this directory for debugging/inspection.
+    # If set, export the merged point sets (SfM + every reconstruction) per scene
+    # as PLY files into this directory for debugging/inspection.
     debug_export_dir: Path | None = None
 
 
@@ -296,14 +325,12 @@ def sfm_points_filtered_out(
 def compute_geometry_accuracy_metrics(
     distances_per_recon: dict[str, np.ndarray],
     filtered_out: np.ndarray | None,
-    labels: dict[str, str],
 ) -> dict[str, float]:
     """
     Compute geometry accuracy metrics from the SfM nearest-neighbour distances.
 
-    `distances_per_recon` maps reconstruction name (POINT_SET_A / POINT_SET_B) to
-    its SfM nearest-neighbour distances. `labels` maps those names to the labels
-    used in the returned metric names (the config strings for A and B).
+    `distances_per_recon` maps each reconstruction's label to its SfM
+    nearest-neighbour distances.
 
     The "distance from SfM" metric measures how faithful a reconstruction is to
     the (sparse) SfM point cloud as the sum of nearest-neighbour distances from
@@ -320,8 +347,8 @@ def compute_geometry_accuracy_metrics(
         return float(np.sum(distances[~filtered_out]))
 
     return {
-        f"dist_from_sfm_{labels[name]}": filtered_sum(distances)
-        for name, distances in distances_per_recon.items()
+        f"dist_from_sfm_{label}": filtered_sum(distances)
+        for label, distances in distances_per_recon.items()
     }
 
 
@@ -337,7 +364,6 @@ def voxel_size_for_scene(scene: str, args: Args) -> float:
 
 def export_debug_point_sets(
     merged: dict[str, PointSet],
-    labels: dict[str, str],
     scene: str,
     debug_export_dir: Path,
 ) -> None:
@@ -345,7 +371,7 @@ def export_debug_point_sets(
     scene_dir = debug_export_dir / str(scene).replace("/", "_")
     scene_dir.mkdir(parents=True, exist_ok=True)
     for name, point_set in merged.items():
-        out_path = scene_dir / f"merged_{labels[name]}.ply"
+        out_path = scene_dir / f"merged_{name}.ply"
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(point_set.points)
         if point_set.colors is not None:
@@ -398,14 +424,13 @@ def export_debug_distance_lines(
     merged: dict[str, PointSet],
     nn: dict[str, tuple[np.ndarray, np.ndarray]],
     filtered_out: np.ndarray | None,
-    labels: dict[str, str],
     scene: str,
     debug_export_dir: Path,
 ) -> None:
     """
-    Export, for each reconstruction (A and B), the SfM-accuracy nearest-neighbour
-    distances as line segments connecting each SfM point to its closest
-    reconstruction point.
+    Export, for each reconstruction, the SfM-accuracy nearest-neighbour distances
+    as line segments connecting each SfM point to its closest reconstruction
+    point.
 
     Lines for SfM points kept by the metric are drawn red; lines for points that
     are filtered out (every reconstruction's distance above the cutoff) are drawn
@@ -415,13 +440,11 @@ def export_debug_distance_lines(
     scene_dir.mkdir(parents=True, exist_ok=True)
 
     sfm = merged[POINT_SET_SFM]
-    for name in (POINT_SET_A, POINT_SET_B):
-        reconstruction = merged[name]
-        distances, indices = nn[name]
+    for label, (distances, indices) in nn.items():
         if indices.size == 0:
             continue
 
-        nn_points = reconstruction.points[indices]
+        nn_points = merged[label].points[indices]
         num = sfm.points.shape[0]
 
         colors = np.tile([1.0, 0.0, 0.0], (num, 1))
@@ -431,27 +454,23 @@ def export_debug_distance_lines(
         points = np.vstack([sfm.points, nn_points])
         lines = np.column_stack([np.arange(num), np.arange(num) + num])
 
-        out_path = scene_dir / f"distances_{labels[name]}.ply"
+        out_path = scene_dir / f"distances_{label}.ply"
         _write_colored_line_set_ply(out_path, points, lines, colors)
-        _LOGGER.info("Exported debug distance lines for '%s' to %s", name, out_path)
+        _LOGGER.info("Exported debug distance lines for '%s' to %s", label, out_path)
 
 
-def evaluate_scene(scene: str, args: Args) -> dict[str, float]:
+def evaluate_scene(
+    scene: str, args: Args, reconstructions: list[Reconstruction]
+) -> dict[str, float]:
     results_dir = ResultsDirectory(args.results_dir)
 
-    dir_a = results_dir.get_init_method_output_dir(
-        scene, args.config_a, args.init_method
-    )
-    dir_b = results_dir.get_init_method_output_dir(
-        scene, args.config_b, args.init_method
-    )
-
     sfm_point_set, transform = load_sfm_and_normalization(scene)
-    point_sets = {
-        POINT_SET_SFM: sfm_point_set,
-        POINT_SET_A: load_point_set(dir_a),
-        POINT_SET_B: load_point_set(dir_b),
-    }
+    point_sets = {POINT_SET_SFM: sfm_point_set}
+    for recon in reconstructions:
+        init_dir = results_dir.get_init_method_output_dir(
+            scene, recon.config, recon.method
+        )
+        point_sets[recon.label] = load_point_set(init_dir)
 
     # Normalize the scene scale (using the SfM point cloud / cameras) by applying
     # the same transform to all point sets before merging.
@@ -466,28 +485,22 @@ def evaluate_scene(scene: str, args: Args) -> dict[str, float]:
         name: merge_close_points(ps, voxel_size) for name, ps in point_sets.items()
     }
 
-    labels = {
-        POINT_SET_SFM: POINT_SET_SFM,
-        POINT_SET_A: args.config_a,
-        POINT_SET_B: args.config_b,
-    }
-
     sfm = merged[POINT_SET_SFM]
     nn = {
-        name: sfm_nearest_neighbors(sfm, merged[name])
-        for name in (POINT_SET_A, POINT_SET_B)
+        recon.label: sfm_nearest_neighbors(sfm, merged[recon.label])
+        for recon in reconstructions
     }
-    distances_per_recon = {name: dist for name, (dist, _) in nn.items()}
+    distances_per_recon = {label: dist for label, (dist, _) in nn.items()}
     threshold = sfm_distance_threshold(distances_per_recon)
     filtered_out = sfm_points_filtered_out(distances_per_recon, threshold)
 
     if args.debug_export_dir is not None:
-        export_debug_point_sets(merged, labels, scene, args.debug_export_dir)
+        export_debug_point_sets(merged, scene, args.debug_export_dir)
         export_debug_distance_lines(
-            merged, nn, filtered_out, labels, scene, args.debug_export_dir
+            merged, nn, filtered_out, scene, args.debug_export_dir
         )
 
-    return compute_geometry_accuracy_metrics(distances_per_recon, filtered_out, labels)
+    return compute_geometry_accuracy_metrics(distances_per_recon, filtered_out)
 
 
 def aggregate_metrics(
@@ -507,6 +520,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args = tyro.cli(Args)
 
+    reconstructions = [parse_reconstruction(spec) for spec in args.init_methods]
+    if not reconstructions:
+        raise ValueError("No reconstructions to evaluate. Provide --init-methods.")
+
     scenes = get_scenes_from_args(list(args.scenes), list(args.datasets))
     if not scenes:
         raise ValueError("No scenes to evaluate. Provide --scenes or --datasets.")
@@ -515,14 +532,16 @@ def main() -> None:
     for scene in scenes:
         scene = str(scene)
         try:
-            per_scene[scene] = evaluate_scene(scene, args)
+            per_scene[scene] = evaluate_scene(scene, args, reconstructions)
             _LOGGER.info("Metrics for %s: %s", scene, per_scene[scene])
         except Exception as e:
             _LOGGER.error("Error evaluating scene %s: %s", scene, e, exc_info=True)
 
     output = {
-        "config_a": args.config_a,
-        "config_b": args.config_b,
+        "reconstructions": [
+            {"method": r.method, "config": r.config, "label": r.label}
+            for r in reconstructions
+        ],
         "per_scene": per_scene,
         "aggregated": aggregate_metrics(per_scene),
     }
