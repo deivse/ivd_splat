@@ -109,6 +109,9 @@ class SplatInitConfig(SerializableConfig):
     scale_noise_std_wrt_median: Optional[float] = None
     rotation_noise_angle_std_deg: Optional[float] = None
     color_noise_std: Optional[float] = None
+    # If true, will just take the splat means and colors and
+    # initialize as if a point cloud was provided, discarding other splat parameters.
+    simulate_point_init: bool = False
 
 
 @dataclass
