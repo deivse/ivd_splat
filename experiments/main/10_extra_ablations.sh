@@ -14,6 +14,7 @@ export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
 REPO_PATH="$HOME/ivd_splat"
 source "$REPO_PATH/experiments/common_slurm_setup.sh"
 source "$REPO_PATH/experiments/main/common_vars.sh"
+source "$REPO_PATH/experiments/main/main_training_funcs.sh"
 
 # Regarding hyperparameters, we adjusted position lr init to 0.00004 and position lr final to 0.000002.
 # Original:                                                  0.00016                          0.0000016             
