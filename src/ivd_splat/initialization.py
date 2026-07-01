@@ -228,7 +228,6 @@ def _pick_dense_init_points(
     Returns:
         Indices of selected points.
     """
-    assert config.init_type == "dense"
 
     target_num_pts = config.dense_init.target_num_points or points.shape[0]
     if config.dense_init.target_points_fraction is not None:
@@ -360,7 +359,10 @@ def _add_noise_to_init_points(
 
 
 def point_cloud_init(
-    raw_init_data: RawInitData, config: Config, scene_scale: float
+    raw_init_data: RawInitData,
+    config: Config,
+    scene_scale: float,
+    init_type: typing.Literal["sparse", "dense"] | None = None,
 ) -> SplatData:
     """
     Create splats from point cloud as in base 3DGS.
@@ -392,7 +394,7 @@ def point_cloud_init(
         )
         num_sparse_pts = sparse_points.shape[0]
 
-    if config.init_type == "dense":
+    if (init_type or config.init_type) == "dense":
         point_indices = _pick_dense_init_points(points, rgbs, num_sparse_pts, config)
         points = points[point_indices]
         rgbs = rgbs[point_indices]
@@ -566,6 +568,20 @@ def splat_init(config: Config, parser: Parser) -> SplatData:
 
     splat_path = nb_metadata["ivd_splat_splat_init_path"]
     splat = load_splat_ply(splat_path)
+
+    if config.splat_init.simulate_point_init:
+        _LOGGER.info(
+            "Simulating point cloud initialization from pre-made splat. This will discard other splat parameters."
+        )
+        pts = transform_points(parser.transform, splat.means).to(torch.float32)
+        rgbs = sh_to_rgb(splat.sh0.squeeze(1)).to(torch.float32)
+        return point_cloud_init(
+            RawInitData(points=pts, rgbs=rgbs),
+            config,
+            scene_scale=parser.scene_scale,
+            init_type="dense",
+        )
+
     # Also increases scales if config.splat_init.increase_scale_with_fewer_splats is True
     _get_splat_subset_inplace(splat, config)
 
