@@ -1,0 +1,29 @@
+#!/bin/bash
+#SBATCH --job-name=gs_init_compare
+#SBATCH --output=logs/slurm-%A_%a.out
+#SBATCH --time=24:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-cpu=10G
+#SBATCH --partition=amdgpu
+#SBATCH --array=0-9
+
+export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
+
+# Can't use script_dir here because location changes when running via slurm
+REPO_PATH="$HOME/ivd_splat"
+source "$REPO_PATH/experiments/common_slurm_setup.sh"
+source "$REPO_PATH/experiments/main/common_vars.sh"
+
+# Regarding hyperparameters, we adjusted position lr init to 0.00004 and position lr final to 0.000002.
+# Original:                                                  0.00016                          0.0000016             
+strategy="IDHFRStrategy"
+train_strat_with_sfm "means_lr_init={0.00004} means_lr_final={0.000002}"
+
+for strategy in DefaultWithGaussianCapStrategy MCMCStrategy IDHFRStrategy; do
+    train_strat_with_practical_init_method "edgs" \
+                     "$ALL_DATASETS_EXCEPT_ETH3D" \
+                     "default" \
+                     "splat_init.increase_scale_with_fewer_splats=False"
+done
+
