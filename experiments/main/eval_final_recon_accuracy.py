@@ -1102,8 +1102,14 @@ def process_splats_via_tsdf(
         pcd = volume.extract_point_cloud()
     points = np.asarray(pcd.points, dtype=np.float64)
     colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
-    if colors is not None and colors.size and colors.max() > 1.0:
-        colors = colors / 255.0
+    if colors is not None and colors.size:
+        # Both backends already return colors in [0, 1] (verified: the CPU
+        # ScalableTSDFVolume divides its stored uint8 color by 255, and the GPU
+        # VoxelBlockGrid stores the [0, 1] color we feed it). Just clip: a few
+        # surface points can get a slightly out-of-range interpolated color
+        # (near-zero TSDF-weight denominators), and a global "max > 1 => /255"
+        # rescale would then blacken the entire cloud from a single outlier.
+        colors = np.clip(colors, 0.0, 1.0)
     extract_seconds = time.perf_counter() - extract_start
     _LOGGER.info(
         "TSDF fusion (%s) produced %d points (%d cams: render %.1fs, "
