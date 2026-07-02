@@ -385,7 +385,16 @@ def resolve_trained_output_dir(
     `output_dir` in the returned value is NOT resolved (symlinks not followed);
     callers that need that should call `.resolve()` themselves.
     """
-    if args.gaussian_cap_per_scene_file is not None:
+    # Retrieve strategy value from param list if present, otherwise default to "DefaultWithGaussianCapStrategy"
+    try:
+        strategy = next(value for key, value in config if key == "strategy")
+    except StopIteration:
+        strategy = None
+
+    if (
+        args.gaussian_cap_per_scene_file is not None
+        and strategy != "DefaultWithoutADCStrategy"
+    ):
         try:
             cap = load_num_points_per_scene(args.gaussian_cap_per_scene_file)[scene]
             cap = int(cap * args.gaussian_cap_fraction)
