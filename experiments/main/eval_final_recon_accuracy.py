@@ -4,6 +4,7 @@ import copy
 import functools
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -75,6 +76,42 @@ _TSDF_GPU_WEIGHT_THRESHOLD = 1.0
 def _default_device() -> torch.device:
     """The device used for GPU-accelerated geometry ops (CUDA when available)."""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# Max CPU workers/threads for parallel CPU-bound ops (KD-tree queries, Open3D,
+# torch CPU ops). -1 follows the SciPy KD-tree convention of "use all cores";
+# overridden by --max-cpu-threads via ``_apply_cpu_thread_limit``.
+_CPU_WORKERS = -1
+
+
+def _apply_cpu_thread_limit(max_threads: int | None) -> None:
+    """
+    Limit the number of CPU threads / parallel workers used for CPU-bound work:
+    torch CPU intra-op threads, Open3D's parallel ops (TSDF integrate/extract),
+    and the KD-tree nearest-neighbour queries (via the module-level
+    ``_CPU_WORKERS`` used in ``_nearest_neighbor_distances``).
+
+    When ``max_threads`` is None, defaults are left untouched (all cores used).
+    """
+    global _CPU_WORKERS
+    if max_threads is None:
+        return
+    if max_threads < 1:
+        raise ValueError(f"max_cpu_threads must be >= 1, got {max_threads}.")
+    _CPU_WORKERS = max_threads
+    torch.set_num_threads(max_threads)
+    # Open3D and the BLAS backends used by numpy/scipy have no runtime
+    # thread-count API in this build; they honour these OpenMP/BLAS environment
+    # variables instead. Setting them here caps thread pools created after this
+    # point; for full effect start the process with them already exported.
+    for var in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[var] = str(max_threads)
+    _LOGGER.info("Limited CPU threads/workers to %d.", max_threads)
 
 
 # Spherical harmonics DC -> RGB constant (see ivd_splat.utils.runner_utils).
@@ -170,6 +207,12 @@ class Args:
     # default (``$TMPDIR`` / ``/tmp``). Useful on clusters where the default temp
     # location is a slow/network filesystem; point this at fast local scratch.
     temp_dir_override: Path | None = None
+
+    # Maximum number of CPU threads / parallel workers to use for CPU-bound work
+    # (KD-tree nearest-neighbour queries, Open3D TSDF integration/extraction, and
+    # torch CPU ops). When None, all available cores are used. Set this to avoid
+    # oversubscribing shared cluster nodes.
+    max_cpu_threads: int | None = None
 
     # External data needed to reproduce trained output directory names 1:1 with
     # ivd_splat_runner (must match what was passed at training time).
@@ -1360,14 +1403,15 @@ def _nearest_neighbor_distances(query: np.ndarray, target: np.ndarray) -> np.nda
     """
     Nearest-neighbor distance from every ``query`` point to the ``target`` set.
 
-    Uses a CPU KD-tree with parallel queries (``workers=-1`` uses all cores),
-    which for these point counts is far faster than a brute-force GPU search.
+    Uses a CPU KD-tree with parallel queries (``workers=_CPU_WORKERS``; -1 uses
+    all cores, or the --max-cpu-threads limit when set), which for these point
+    counts is far faster than a brute-force GPU search.
     """
     if query.shape[0] == 0 or target.shape[0] == 0:
         return np.empty((0,), dtype=np.float64)
 
     tree = cKDTree(target)
-    distances, _ = tree.query(query, k=1, workers=-1)
+    distances, _ = tree.query(query, k=1, workers=_CPU_WORKERS)
     return np.asarray(distances, dtype=np.float64)
 
 
@@ -1589,6 +1633,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     args = tyro.cli(Args)
+    _apply_cpu_thread_limit(args.max_cpu_threads)
 
     if args.load_existing:
         if not args.output.exists():
