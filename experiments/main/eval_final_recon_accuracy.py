@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import logging
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +49,13 @@ from shared.save_init_info import INIT_INFO_JSON_FILENAME
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_VOXEL_SIZE = 0.02
+
+
+@functools.lru_cache(maxsize=1)
+def _default_device() -> torch.device:
+    """The device used for GPU-accelerated geometry ops (CUDA when available)."""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 # Spherical harmonics DC -> RGB constant (see ivd_splat.utils.runner_utils).
 _SH_C0 = 0.28209479177387814
@@ -565,39 +574,45 @@ def voxel_downsample_aligned(
 
     Aligning to the origin makes this grid coincide with Open3D's TSDF voxel grid
     (used for the splat path), so the two comparable point sets share voxels.
+
+    Runs on the GPU (when available): points are bucketed into voxels via a
+    linear voxel index and averaged with ``scatter_add``. This is far faster than
+    a CPU ``np.unique`` over tens of millions of points.
     """
     if points.shape[0] == 0:
         return points, colors
 
-    keys = np.floor(points / voxel_size).astype(np.int64)
-    _, inverse = np.unique(keys, axis=0, return_inverse=True)
-    inverse = np.asarray(inverse).reshape(-1)
-    num_voxels = int(inverse.max()) + 1
-    counts = np.bincount(inverse, minlength=num_voxels).astype(np.float64)
+    device = _default_device()
+    pts = torch.as_tensor(points, dtype=torch.float64, device=device)
 
-    down_points = (
-        np.stack(
-            [
-                np.bincount(inverse, weights=points[:, d], minlength=num_voxels)
-                for d in range(3)
-            ],
-            axis=1,
-        )
-        / counts[:, None]
-    )
+    keys = torch.floor(pts / voxel_size).to(torch.int64)  # (N, 3)
+    keys -= keys.amin(dim=0)  # shift to non-negative voxel indices
+    dims = keys.amax(dim=0) + 1  # (3,) grid extent per axis
+
+    # Prefer a compact 1D linear voxel index (fast unique); fall back to a row
+    # unique when the grid extent would overflow int64 (e.g. far-away floaters).
+    if torch.prod(dims.double()).item() < float(2**62):
+        lin = (keys[:, 0] * dims[1] + keys[:, 1]) * dims[2] + keys[:, 2]  # (N,)
+        _, inverse = torch.unique(lin, return_inverse=True)
+    else:
+        _, inverse = torch.unique(keys, dim=0, return_inverse=True)
+    inverse = inverse.reshape(-1)
+    num_voxels = int(inverse.amax().item()) + 1
+
+    counts = torch.zeros(num_voxels, dtype=torch.float64, device=device)
+    counts.scatter_add_(0, inverse, torch.ones_like(inverse, dtype=torch.float64))
+
+    idx3 = inverse.unsqueeze(1).expand(-1, 3)
+    sums = torch.zeros((num_voxels, 3), dtype=torch.float64, device=device)
+    sums.scatter_add_(0, idx3, pts)
+    down_points = (sums / counts.unsqueeze(1)).cpu().numpy()
 
     down_colors = None
     if colors is not None:
-        down_colors = (
-            np.stack(
-                [
-                    np.bincount(inverse, weights=colors[:, d], minlength=num_voxels)
-                    for d in range(3)
-                ],
-                axis=1,
-            )
-            / counts[:, None]
-        )
+        col = torch.as_tensor(colors, dtype=torch.float64, device=device)
+        csums = torch.zeros((num_voxels, 3), dtype=torch.float64, device=device)
+        csums.scatter_add_(0, idx3, col)
+        down_colors = (csums / counts.unsqueeze(1)).cpu().numpy()
 
     return down_points, down_colors
 
@@ -609,39 +624,52 @@ def filter_points_visible_in_cameras(
     Keep only points that project into the image frustum of at least one training
     camera (in front of the camera and within image bounds). This is a pure
     visibility/frustum test (no occlusion test).
+
+    Projection is done on the GPU (when available), looping over cameras and
+    OR-ing the per-camera visibility masks.
     """
     num_points = points.shape[0]
     if num_points == 0:
         return points, colors
 
-    visible = np.zeros(num_points, dtype=bool)
-    homogeneous = np.concatenate(
-        [points, np.ones((num_points, 1), dtype=np.float64)], axis=1
+    device = _default_device()
+    pts = torch.as_tensor(points, dtype=torch.float32, device=device)
+    homogeneous = torch.cat(
+        [pts, torch.ones((num_points, 1), dtype=torch.float32, device=device)], dim=1
     )  # (N, 4)
 
+    camtoworlds = torch.as_tensor(
+        cameras.camtoworlds, dtype=torch.float32, device=device
+    )  # (C, 4, 4)
+    world_to_cams = torch.linalg.inv(camtoworlds)  # (C, 4, 4)
+    Ks = torch.as_tensor(cameras.Ks, dtype=torch.float32, device=device)  # (C, 3, 3)
+    widths = torch.as_tensor(cameras.widths, dtype=torch.float32, device=device)
+    heights = torch.as_tensor(cameras.heights, dtype=torch.float32, device=device)
+
+    visible = torch.zeros(num_points, dtype=torch.bool, device=device)
     for cam_idx in range(len(cameras)):
-        world_to_cam = np.linalg.inv(cameras.camtoworlds[cam_idx])
-        cam_points = homogeneous @ world_to_cam.T  # (N, 4)
+        cam_points = homogeneous @ world_to_cams[cam_idx].T  # (N, 4)
         z = cam_points[:, 2]
         in_front = z > 1e-6
-        safe_z = np.where(in_front, z, 1.0)
+        safe_z = torch.where(in_front, z, torch.ones_like(z))
 
-        K = cameras.Ks[cam_idx]
+        K = Ks[cam_idx]
         u = K[0, 0] * cam_points[:, 0] / safe_z + K[0, 2]
         v = K[1, 1] * cam_points[:, 1] / safe_z + K[1, 2]
 
         in_bounds = (
             in_front
             & (u >= 0)
-            & (u < cameras.widths[cam_idx])
+            & (u < widths[cam_idx])
             & (v >= 0)
-            & (v < cameras.heights[cam_idx])
+            & (v < heights[cam_idx])
         )
         visible |= in_bounds
-        if visible.all():
+        if bool(visible.all()):
             break
 
-    return points[visible], (colors[visible] if colors is not None else None)
+    vis_mask = visible.cpu().numpy()
+    return points[vis_mask], (colors[vis_mask] if colors is not None else None)
 
 
 def process_laser_scan_point_cloud(
@@ -745,6 +773,10 @@ def process_splats_via_tsdf(
     fused points are directly comparable to the processed laser scan at true
     metric scale.
 
+    Rendering is done on the GPU (gsplat); the depths are TSDF-fused with Open3D's
+    multithreaded ``ScalableTSDFVolume`` (this consistently beat the GPU tensor
+    ``VoxelBlockGrid`` for these high-resolution, many-frame scenes).
+
     When ``debug_export_dir`` is given, the fused point cloud is written there as
     a PLY.
     """
@@ -758,12 +790,15 @@ def process_splats_via_tsdf(
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
     )
 
+    render_seconds = 0.0
+    integrate_seconds = 0.0
     for cam_idx in range(len(cameras)):
         width = int(cameras.widths[cam_idx])
         height = int(cameras.heights[cam_idx])
         camtoworld = cameras.camtoworlds[cam_idx]
         viewmat = np.linalg.inv(camtoworld)
 
+        render_start = time.perf_counter()
         viewmats = torch.as_tensor(
             viewmat[None], dtype=torch.float32, device=device
         )  # (1, 4, 4)
@@ -799,7 +834,9 @@ def process_splats_via_tsdf(
             (rgb.clamp(0.0, 1.0) * 255.0).to(torch.uint8).cpu().numpy()
         )
         depth_np = np.ascontiguousarray(depth.cpu().numpy().astype(np.float32))
+        render_seconds += time.perf_counter() - render_start
 
+        integrate_start = time.perf_counter()
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             o3d.geometry.Image(color_np),
             o3d.geometry.Image(depth_np),
@@ -816,11 +853,22 @@ def process_splats_via_tsdf(
             cameras.Ks[cam_idx][1, 2],
         )
         volume.integrate(rgbd, intrinsic, viewmat)
+        integrate_seconds += time.perf_counter() - integrate_start
 
+    extract_start = time.perf_counter()
     pcd = volume.extract_point_cloud()
     points = np.asarray(pcd.points, dtype=np.float64)
     colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
-    _LOGGER.info("TSDF fusion produced %d points", points.shape[0])
+    extract_seconds = time.perf_counter() - extract_start
+    _LOGGER.info(
+        "TSDF fusion produced %d points (%d cams: render %.1fs, integrate %.1fs, "
+        "extract %.1fs)",
+        points.shape[0],
+        len(cameras),
+        render_seconds,
+        integrate_seconds,
+        extract_seconds,
+    )
     result = PointSet(points=points, colors=colors)
     if debug_export_dir is not None:
         _write_point_set_ply(
@@ -1050,7 +1098,7 @@ def _init_alignment_error(
         rng = np.random.default_rng(0)
         query = query[rng.choice(query.shape[0], size=sample_size, replace=False)]
 
-    distances, _ = cKDTree(means).query(query, k=1)
+    distances = _nearest_neighbor_distances(query, means)
     return float(np.median(distances))
 
 
@@ -1147,11 +1195,17 @@ _PERCENT_METRICS = {"fscore", "precision", "recall"}
 
 
 def _nearest_neighbor_distances(query: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """Nearest-neighbor distance from every ``query`` point to the ``target`` set."""
+    """
+    Nearest-neighbor distance from every ``query`` point to the ``target`` set.
+
+    Uses a CPU KD-tree with parallel queries (``workers=-1`` uses all cores),
+    which for these point counts is far faster than a brute-force GPU search.
+    """
     if query.shape[0] == 0 or target.shape[0] == 0:
         return np.empty((0,), dtype=np.float64)
+
     tree = cKDTree(target)
-    distances, _ = tree.query(query, k=1)
+    distances, _ = tree.query(query, k=1, workers=-1)
     return np.asarray(distances, dtype=np.float64)
 
 
@@ -1172,12 +1226,19 @@ def compute_fscore_metrics(
     Also reports the mean/median nearest-neighbor distances in both directions
     (in meters).
     """
+    nn_start = time.perf_counter()
     dist_recon_to_ref = _nearest_neighbor_distances(
         reconstruction.points, reference.points
     )  # accuracy / precision direction
     dist_ref_to_recon = _nearest_neighbor_distances(
         reference.points, reconstruction.points
     )  # completeness / recall direction
+    _LOGGER.info(
+        "F-score NN distances (%d recon vs %d ref points): %.1fs",
+        reconstruction.points.shape[0],
+        reference.points.shape[0],
+        time.perf_counter() - nn_start,
+    )
 
     def _fraction_within(distances: np.ndarray) -> float:
         if distances.size == 0:
@@ -1359,7 +1420,12 @@ def main() -> None:
     # ``force=True`` so we reconfigure even if an imported dependency already
     # installed a root handler (otherwise basicConfig is a no-op and the root
     # logger stays at WARNING, dropping our INFO logs).
-    logging.basicConfig(level=logging.INFO, force=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        force=True,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     args = tyro.cli(Args)
 
     if args.load_existing:
