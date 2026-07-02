@@ -65,11 +65,8 @@ DEFAULT_VOXEL_SIZE = 0.02
 _TSDF_BLOCK_RESOLUTION = 16
 _TSDF_BLOCK_COUNT = 80000
 # Minimum accumulated voxel weight for a voxel to contribute to the extracted
-# GPU point cloud. Open3D's tensor default is 3.0; 1.0 keeps voxels observed by
-# at least one frame, which produces a point set closer to the CPU backend (a
-# higher threshold prunes many more voxels and diverges further). The tensor
-# VoxelBlockGrid extracts a slightly thicker band than the CPU iso-surface, so
-# the two backends do not produce identical point sets regardless of this value.
+# GPU point cloud (Open3D's tensor default is 3.0). Lowered to 1.0 to also keep
+# voxels seen in only a few frames.
 _TSDF_GPU_WEIGHT_THRESHOLD = 1.0
 
 
@@ -240,11 +237,9 @@ class Args:
     #
     # "gpu" uses Open3D's CUDA tensor VoxelBlockGrid (needs a CUDA device and a
     # few GB of spare VRAM; auto-falls back to "cpu" when none is available).
-    # Its point-cloud extraction returns a slightly thicker near-surface band
-    # than the CPU iso-surface, so its metrics differ slightly from "cpu".
+    # Its metrics differ slightly from "cpu".
     #
-    # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume and is the
-    # verified, reference path.
+    # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume.
     tsdf_backend: Literal["gpu", "cpu"] = "cpu"
 
     # Integer factor by which to downscale the rendered (and TSDF-integrated)
@@ -914,9 +909,7 @@ def process_splats_via_tsdf(
       VRAM; falls back to ``"cpu"`` when no CUDA device is available.
     - ``"cpu"``: Open3D's multithreaded ``ScalableTSDFVolume``.
 
-    Both backends extract the same zero-crossing surface points (the GPU grid's
-    extraction weight threshold is set to keep every observed voxel, matching the
-    CPU path), so their outputs agree up to numerical differences.
+    Both backends extract a surface point cloud from the fused TSDF volume.
 
     When ``debug_export_dir`` is given, the fused point cloud is written there as
     a PLY.
@@ -1103,12 +1096,10 @@ def process_splats_via_tsdf(
     points = np.asarray(pcd.points, dtype=np.float64)
     colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
     if colors is not None and colors.size:
-        # Both backends already return colors in [0, 1] (verified: the CPU
-        # ScalableTSDFVolume divides its stored uint8 color by 255, and the GPU
-        # VoxelBlockGrid stores the [0, 1] color we feed it). Just clip: a few
-        # surface points can get a slightly out-of-range interpolated color
-        # (near-zero TSDF-weight denominators), and a global "max > 1 => /255"
-        # rescale would then blacken the entire cloud from a single outlier.
+        # Both backends return colors in [0, 1]. Clip rather than rescaling: a
+        # few surface points can get a slightly out-of-range interpolated color,
+        # and a global "max > 1 => /255" rescale would blacken the whole cloud
+        # from a single outlier.
         colors = np.clip(colors, 0.0, 1.0)
     extract_seconds = time.perf_counter() - extract_start
     _LOGGER.info(
