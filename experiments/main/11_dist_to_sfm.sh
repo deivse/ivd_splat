@@ -19,6 +19,6 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 python eval_closeness_to_sfm.py \
     --results-dir $RESULTS_DIR \
     --datasets mipnerf360 tanksandtemples \
-    --init-methods edgs=default monodepth=default da3=floater_removal=True da3=max_num_images=150_output_gaussians=True \
+    --init-methods edgs=default monodepth=default da3=floater_removal=True da3=output_gaussians=True_max_num_images=150 \
     --debug-export-dir ./debug_closeness_to_sfm
 
