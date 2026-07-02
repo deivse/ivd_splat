@@ -65,8 +65,12 @@ DEFAULT_VOXEL_SIZE = 0.02
 _TSDF_BLOCK_RESOLUTION = 16
 _TSDF_BLOCK_COUNT = 80000
 # Minimum accumulated voxel weight for a voxel to contribute to the extracted
-# GPU point cloud. Open3D's tensor default is 3.0
-_TSDF_GPU_WEIGHT_THRESHOLD = 3.0
+# GPU point cloud. Open3D's tensor default is 3.0; 1.0 keeps voxels observed by
+# at least one frame, which produces a point set closer to the CPU backend (a
+# higher threshold prunes many more voxels and diverges further). The tensor
+# VoxelBlockGrid extracts a slightly thicker band than the CPU iso-surface, so
+# the two backends do not produce identical point sets regardless of this value.
+_TSDF_GPU_WEIGHT_THRESHOLD = 1.0
 
 
 @functools.lru_cache(maxsize=1)
@@ -1090,13 +1094,7 @@ def process_splats_via_tsdf(
 
     extract_start = time.perf_counter()
     if use_gpu:
-        # Extract the fused surface points directly on the GPU. The tensor
-        # VoxelBlockGrid returns a slightly thicker band of near-surface voxels
-        # than the CPU ScalableTSDFVolume iso-surface, so the two backends do not
-        # produce identical point sets (metrics differ slightly). The
-        # marching-cubes extract_triangle_mesh would match the CPU path more
-        # closely but crashes on floater-heavy grids, so this robust point-cloud
-        # extraction is used instead.
+        # Extract the fused surface points on the GPU.
         pcd = vbg.extract_point_cloud(
             weight_threshold=_TSDF_GPU_WEIGHT_THRESHOLD
         ).to_legacy()
