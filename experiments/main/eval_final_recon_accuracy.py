@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import tempfile
@@ -292,8 +293,24 @@ def resolve_runs_for_scene(
             row_id = load_configs([base_config], None)[0].make_config_name(
                 CONFIG_STR_PARAM_RENAMES
             )
+
+            runner_args_copy = copy.deepcopy(runner_args)
+            param_list_list = list(param_list)
+
+            # Special case - base SfM with this strat has no cap.
+            if (
+                column.init_method == "sfm"
+                and len(param_list_list) == 0
+                and param_list_list[0]
+                == (
+                    "strategy",
+                    "DefaultWithGaussianCapStrategy",
+                )
+            ):
+                runner_args_copy.gaussian_cap_per_scene_file = None
+
             resolved = resolve_trained_output_dir(
-                results_dir, column.init_method, param_list, scene, runner_args
+                results_dir, column.init_method, param_list, scene, runner_args_copy
             )
             runs.append(
                 ResolvedRun(
