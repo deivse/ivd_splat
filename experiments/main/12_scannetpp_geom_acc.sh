@@ -8,6 +8,10 @@
 #SBATCH --partition=amdgpufast
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
+# Slurm redirects stdout/stderr to a file, which makes Python block-buffer its
+# output so log lines only appear at exit (or are lost if the job is killed).
+# Force unbuffered output so logs stream into the slurm log in real time.
+export PYTHONUNBUFFERED=1
 
 # Can't use script_dir here because location changes when running via slurm
 REPO_PATH="$HOME/ivd_splat"
@@ -18,7 +22,7 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 #######################################################################
 
 
-python experiments/main/eval_final_recon_accuracy.py \
+python -u experiments/main/eval_final_recon_accuracy.py \
     --init-methods sfm=default edgs=default monodepth=default da3=floater_removal=True da3=output_gaussians=True_max_num_images=150 laser_scan=default \
     --datasets scannet++ \
     --ivd_splat_configs "strategy=DefaultWithGaussianCapStrategy" "strategy=INRIAStrategy" "strategy=MCMCStrategy" "strategy=IDHFRStrategy" "strategy=DefaultWithoutADCStrategy" \
