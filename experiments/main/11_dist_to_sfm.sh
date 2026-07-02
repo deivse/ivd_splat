@@ -1,11 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=gs_init_compare
-#SBATCH --output=logs/slurm-%A_%a.out
+#SBATCH --output=dist_to_sfm_log.out
 #SBATCH --time=1:00:00
-#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=1G
-#SBATCH --partition=amdgpufast
+#SBATCH --partition=amdfast
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
 
@@ -17,10 +16,9 @@ source "$REPO_PATH/experiments/main/common_vars.sh"
 
 #######################################################################
 
-python eval_da3_geometry_accuracy.py \
+python eval_closeness_to_sfm.py \
     --results-dir $RESULTS_DIR \
     --datasets mipnerf360 tanksandtemples \
-    --config-a floater_removal=True \
-    --config-b output_gaussians=True_max_num_images=150 \
-    --output ./da3_geom_acc_results.json
+    --init-methods edgs=default monodepth=default da3=floater_removal=True da3=max_num_images=150_output_gaussians=True \
+    --debug-export-dir ./debug_closeness_to_sfm
 

@@ -42,6 +42,20 @@ class FormatOptions:
     # combined into a single floating ``table``/``table*`` environment instead of
     # one separate float per dataset. Requires the ``subcaption`` LaTeX package.
     combine_datasets_as_subtables: bool = True
+    # Upper bound on the color intensity (in [0, 1]). 1.0 uses the full color map
+    # range; lower values compress the gradient toward its neutral center so the
+    # strongest cells stay paler. 0.0 disables coloring entirely (cells stay
+    # white, only the text is rendered).
+    color_intensity: float = 1.0
+    # When True, all cell text is rendered black regardless of cell background
+    # (instead of switching to light text on dark cells).
+    force_black_text: bool = (
+        False  # Fraction (in [0, 1]) of the top of the value range to color in value-cmap
+    )
+    # tables; cells below `vmax - color_best_fract * (vmax - vmin)` stay white.
+    # 1.0 colors everything. The gradient is restretched over the colored slice
+    # so those cells use the full colormap. Has no effect on diverging tables.
+    color_best_fract: float = 1.0
 
     def get_latex_size(self) -> str:
         if self.table_size == "default":
@@ -82,12 +96,16 @@ class CellData(typing.NamedTuple):
     def for_metric(df: pd.DataFrame, metric_id: str) -> "CellData":
         return CellData(
             metric_id=metric_id,
-            mean=df[metric_id].map(lambda x: np.array(x).mean()).mean(),
-            stddev=df[metric_id].map(lambda x: np.array(x).std()).mean(),
-            min=df[metric_id].map(lambda x: np.array(x).min()).mean(),
-            max=df[metric_id].map(lambda x: np.array(x).max()).mean(),
-            scene_stddev=df[metric_id].map(lambda x: np.array(x).mean()).std(),
-            mean_measurement_count=df[metric_id].map(lambda x: len(x)).mean(),
+            mean=df[metric_id].map(lambda x: np.array(x).mean()).mean(skipna=False),
+            stddev=df[metric_id].map(lambda x: np.array(x).std()).mean(skipna=False),
+            min=df[metric_id].map(lambda x: np.array(x).min()).mean(skipna=False),
+            max=df[metric_id].map(lambda x: np.array(x).max()).mean(skipna=False),
+            scene_stddev=df[metric_id]
+            .map(lambda x: np.array(x).mean())
+            .std(skipna=False),
+            mean_measurement_count=df[metric_id]
+            .map(lambda x: len(x))
+            .mean(skipna=False),
         )
 
 
@@ -97,31 +115,36 @@ TableCellFormatter = Callable[[CellData], str]
 def make_cell_formatter(
     cell_type: TableCellType,
     rounding_per_metric: dict[str, int] | None = None,
+    always_show_sign: bool = False,
 ) -> TableCellFormatter:
     def get_rounding(cell_data: CellData) -> int:
         return (rounding_per_metric or TABLE_ROUNDING_PER_METRIC).get(
             cell_data.metric_id, 2
         )
 
+    def mean_with_sign(x: CellData) -> str:
+        if always_show_sign:
+            return f"{x.mean:+.{get_rounding(x)}f}"
+        else:
+            return f"{x.mean:.{get_rounding(x)}f}"
+
     if cell_type == TableCellType.mean:
-        return lambda x: f"${x.mean:.{get_rounding(x)}f}$"
+        return lambda x: f"${mean_with_sign(x)}$"
     elif cell_type == TableCellType.std:
-        return lambda x: (
-            f"${x.mean:.{get_rounding(x)}f} \\pm {x.stddev:.{get_rounding(x)}f}$"
-        )
+        return lambda x: (f"${mean_with_sign(x)} \\pm {x.stddev:.{get_rounding(x)}f}$")
     elif cell_type == TableCellType.minmax:
         return (
-            lambda x: f"${x.mean:.{get_rounding(x)}f} \\in [{format_number_compactly(x.min)},{format_number_compactly(x.max)}]$"
+            lambda x: f"${mean_with_sign(x)} \\in [{format_number_compactly(x.min)},{format_number_compactly(x.max)}]$"
         )
     elif cell_type == TableCellType.range_only:
         return lambda x: f"[{x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f}]"
     elif cell_type == TableCellType.all_runwise:
         return (
-            lambda x: f"${x.mean:.{get_rounding(x)}f} \\pm {x.stddev:.{get_rounding(x)}f} ({x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f})$"
+            lambda x: f"${mean_with_sign(x)} \\pm {x.stddev:.{get_rounding(x)}f} ({x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f})$"
         )
     elif cell_type == TableCellType.scene_std:
         return (
-            lambda x: f"${x.mean:.{get_rounding(x)}f} \\pm {x.scene_stddev:.{get_rounding(x)}f}$"
+            lambda x: f"${mean_with_sign(x)} \\pm {x.scene_stddev:.{get_rounding(x)}f}$"
         )
     else:
         raise ValueError(f"Invalid format table cell type: {cell_type}")

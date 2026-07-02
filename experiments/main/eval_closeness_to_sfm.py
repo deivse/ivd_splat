@@ -18,7 +18,7 @@ script:
 
 Example::
 
-    python experiments/main/eval_da3_geometry_accuracy.py \
+    python experiments/main/eval_closeness_to_sfm.py \
         --init-methods da3=max_num_images=30 \
                        da3=max_num_images=30_output_gaussians=True \
                        monodepth=default \
@@ -126,7 +126,7 @@ class Args:
     default_voxel_size: float = DEFAULT_VOXEL_SIZE
 
     # Output JSON file for per-scene and aggregated metrics.
-    output: Path = Path("da3_geometry_accuracy.json")
+    output: Path = Path("closeness_to_sfm.json")
 
     # If set, export the merged point sets (SfM + every reconstruction) per scene
     # as PLY files into this directory for debugging/inspection.
