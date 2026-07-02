@@ -65,11 +65,8 @@ DEFAULT_VOXEL_SIZE = 0.02
 _TSDF_BLOCK_RESOLUTION = 16
 _TSDF_BLOCK_COUNT = 80000
 # Minimum accumulated voxel weight for a voxel to contribute to the extracted
-# GPU iso-surface. Must be > 0: marching-cubes extraction (extract_triangle_mesh)
-# on zero-weight voxels triggers an illegal CUDA memory access. 1.0 (the value
-# used in Open3D's own reconstruction examples) keeps voxels observed by at least
-# one frame while dropping never-integrated ones.
-_TSDF_GPU_WEIGHT_THRESHOLD = 1.0
+# GPU point cloud. Open3D's tensor default is 3.0
+_TSDF_GPU_WEIGHT_THRESHOLD = 3.0
 
 
 @functools.lru_cache(maxsize=1)
@@ -237,10 +234,13 @@ class Args:
     min_render_alpha: float = 0.5
     # TSDF fusion backend.
     #
-    # WARNING: "gpu" is currently BROKEN and should not be used
+    # "gpu" uses Open3D's CUDA tensor VoxelBlockGrid (needs a CUDA device and a
+    # few GB of spare VRAM; auto-falls back to "cpu" when none is available).
+    # Its point-cloud extraction returns a slightly thicker near-surface band
+    # than the CPU iso-surface, so its metrics differ slightly from "cpu".
     #
     # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume and is the
-    # verified, correct path.
+    # verified, reference path.
     tsdf_backend: Literal["gpu", "cpu"] = "cpu"
 
     # Integer factor by which to downscale the rendered (and TSDF-integrated)
@@ -953,7 +953,10 @@ def process_splats_via_tsdf(
         if render_downscale > 1:
             rendered_sizes = sorted(
                 {
-                    (max(1, int(w) // render_downscale), max(1, int(h) // render_downscale))
+                    (
+                        max(1, int(w) // render_downscale),
+                        max(1, int(h) // render_downscale),
+                    )
                     for w, h in zip(cameras.widths, cameras.heights)
                 }
             )
@@ -1002,9 +1005,7 @@ def process_splats_via_tsdf(
         viewmats = torch.as_tensor(
             viewmat[None], dtype=torch.float32, device=device
         )  # (1, 4, 4)
-        Ks = torch.as_tensor(
-            K[None], dtype=torch.float32, device=device
-        )  # (1, 3, 3)
+        Ks = torch.as_tensor(K[None], dtype=torch.float32, device=device)  # (1, 3, 3)
 
         render_colors, render_alphas, _ = rasterization(
             means=means,
@@ -1046,9 +1047,7 @@ def process_splats_via_tsdf(
 
         integrate_start = time.perf_counter()
         if use_gpu:
-            intrinsic = o3c.Tensor(
-                K, dtype=o3c.float64, device=o3c.Device("CPU:0")
-            )
+            intrinsic = o3c.Tensor(K, dtype=o3c.float64, device=o3c.Device("CPU:0"))
             extrinsic = o3c.Tensor(
                 viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
             )
@@ -1091,30 +1090,20 @@ def process_splats_via_tsdf(
 
     extract_start = time.perf_counter()
     if use_gpu:
-        # Extract the marching-cubes iso-surface (a thin, interpolated surface),
-        # not extract_point_cloud (which returns a thick band of near-surface
-        # voxel points and produces many more points than the CPU path). Using
-        # the mesh vertices matches ScalableTSDFVolume.extract_point_cloud's
-        # zero-crossing surface points closely.
-        #
-        # Move the grid to CPU before extraction: the CUDA marching-cubes path
-        # hits an illegal memory access on large / floater-heavy grids, whereas
-        # the CPU extraction is robust (integration still ran on the GPU).
-        mesh = (
-            vbg.cpu()
-            .extract_triangle_mesh(weight_threshold=_TSDF_GPU_WEIGHT_THRESHOLD)
-            .to_legacy()
-        )
-        points = np.asarray(mesh.vertices, dtype=np.float64)
-        colors = (
-            np.asarray(mesh.vertex_colors, dtype=np.float64)
-            if mesh.has_vertex_colors()
-            else None
-        )
+        # Extract the fused surface points directly on the GPU. The tensor
+        # VoxelBlockGrid returns a slightly thicker band of near-surface voxels
+        # than the CPU ScalableTSDFVolume iso-surface, so the two backends do not
+        # produce identical point sets (metrics differ slightly). The
+        # marching-cubes extract_triangle_mesh would match the CPU path more
+        # closely but crashes on floater-heavy grids, so this robust point-cloud
+        # extraction is used instead.
+        pcd = vbg.extract_point_cloud(
+            weight_threshold=_TSDF_GPU_WEIGHT_THRESHOLD
+        ).to_legacy()
     else:
         pcd = volume.extract_point_cloud()
-        points = np.asarray(pcd.points, dtype=np.float64)
-        colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    points = np.asarray(pcd.points, dtype=np.float64)
+    colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
     if colors is not None and colors.size and colors.max() > 1.0:
         colors = colors / 255.0
     extract_seconds = time.perf_counter() - extract_start
