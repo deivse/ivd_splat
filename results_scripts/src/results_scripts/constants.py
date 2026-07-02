@@ -100,10 +100,12 @@ DEFAULT_STRATEGY_ARGS = {
     },
 }
 
-GT_DATASETS = ["scannet++", "eval_on_train_set_scannet++", "eth3d"]
-GT_DATASETS_WITHOUT_ETH3D = [dataset for dataset in GT_DATASETS if dataset != "eth3d"]
+LASER_DATASETS = ["scannet++", "eval_on_train_set_scannet++", "eth3d"]
+LASER_DATASETS_WITHOUT_ETH3D = [
+    dataset for dataset in LASER_DATASETS if dataset != "eth3d"
+]
 OTHER_DATASETS = ["mipnerf360", "tanksandtemples"]
-ALL_DATASETS = GT_DATASETS + OTHER_DATASETS
+ALL_DATASETS = LASER_DATASETS + OTHER_DATASETS
 ALL_DATASETS_WITHOUT_ETH3D = [dataset for dataset in ALL_DATASETS if dataset != "eth3d"]
 
 DATASET_NAMES = {
@@ -121,12 +123,30 @@ DEFAULT_TABLE_METRICS = [
     "train/total-train-time",
 ]
 
-METRIC_PRETTY_NAMES = {
-    "eval-all-test/psnr": "PSNR ↑",
-    "eval-all-test/ssim": "SSIM ↑",
-    "eval-all-test/lpips": "LPIPS ↓",
+# Metrics for which a lower value is better. Drives both the arrow shown in
+# pretty metric names and the direction of table coloring (so "better" is always
+# the warm end of the color map, regardless of metric direction).
+LOWER_IS_BETTER_METRICS = {
+    "eval-all-test/lpips",
+    "train/num-gaussians",
+    "train/total-train-time",
+}
+
+# Base (arrow-less) display names; arrows are appended from LOWER_IS_BETTER_METRICS.
+METRIC_BASE_NAMES = {
+    "eval-all-test/psnr": "PSNR",
+    "eval-all-test/ssim": "SSIM",
+    "eval-all-test/lpips": "LPIPS",
     "train/num-gaussians": "Num Gaussians",
     "train/total-train-time": "Train Time (min)",
+    "fscore": "F-Score (\\%)",
+    "precision": "Precision (\\%)",
+    "recall": "Recall (\\%)",
+}
+
+METRIC_PRETTY_NAMES = {
+    metric: f"{name} {'↓' if metric in LOWER_IS_BETTER_METRICS else '↑'}"
+    for metric, name in METRIC_BASE_NAMES.items()
 }
 PER_SCENE_VARYING_PARAMS = {"scene", "dense_init.target_num_points", "strategy.cap_max"}
 
@@ -224,6 +244,9 @@ TABLE_ROUNDING_PER_METRIC = {
     "eval-all-test/ssim": 3,
     "eval-all-test/lpips": 3,
     "train/total-train-time": 1,
+    "fscore": 0,
+    "precision": 0,
+    "recall": 0,
 }
 
 

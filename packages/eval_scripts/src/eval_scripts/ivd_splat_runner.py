@@ -347,21 +347,54 @@ def should_train(
     return True
 
 
-def process_combination(
-    scene: str,
+@dataclass
+class ResolvedCombination:
+    """
+    The result of resolving a single (scene, init_method, config) combination:
+    the output directory it maps to plus the derived config name and the fully
+    prepended config / data value used for the actual nerfbaselines invocation.
+    """
+
+    # nerfbaselines method output directory (NOT resolved, symlinks not followed).
+    output_dir: Path
+    # Directory name derived from the config string (+ init/cap/eval-iter tags).
+    config_name: str
+    # The config with initialization (and cap/eval-iter) params prepended.
+    config: ParamList
+    # The nerfbaselines --data value to run with.
+    nerfbaselines_data_value: str
+    # extra_tags used for the config name (also logged to mlflow by the runner).
+    extra_tags: list[str]
+
+
+def resolve_trained_output_dir(
+    results_dir: ResultsDirectory,
     init_method: str,
     config: ParamList,
+    scene: str,
     args: IVDRunnerArguments,
-    eval_all_iters: list[int],
-    subprocess_env: dict[str, str],
-):
-    print(
-        ANSIEscapes.format("_" * 80, "bold"),
-        ANSIEscapes.format("=" * 80 + "\n", "blue"),
-        sep="\n",
-    )
+) -> ResolvedCombination:
+    """
+    Compute the nerfbaselines method output directory (and derived config name)
+    for a single (scene, init_method, config) combination.
 
-    if args.gaussian_cap_per_scene_file is not None:
+    This is the exact directory-name derivation used by `process_combination`,
+    extracted verbatim so other tools (e.g. evaluation scripts) can reproduce the
+    output directory for a trained run 1:1 from its config string.
+
+    `output_dir` in the returned value is NOT resolved (symlinks not followed);
+    callers that need that should call `.resolve()` themselves.
+    """
+    # Retrieve strategy value from param list if present, otherwise default to "DefaultWithGaussianCapStrategy"
+    try:
+        strategy = next(value for key, value in config if key == "strategy")
+    except StopIteration:
+        strategy = None
+
+    if (
+        args.gaussian_cap_per_scene_file is not None
+        and strategy != "DefaultWithoutADCStrategy"
+    ):
         try:
             cap = load_num_points_per_scene(args.gaussian_cap_per_scene_file)[scene]
             cap = int(cap * args.gaussian_cap_fraction)
@@ -387,7 +420,7 @@ def process_combination(
 
     nerfbaselines_data_val, initialization_params = (
         get_data_and_config_overrides_for_init_method(
-            ResultsDirectory(args.output_dir), init_method, scene, args
+            results_dir, init_method, scene, args
         )
     )
     init_params_included_in_name = [
@@ -402,15 +435,46 @@ def process_combination(
     )
     config = config.with_prepended_params(initialization_params)
 
-    output_dir = ResultsDirectory(args.output_dir).get_method_output_dir(
+    output_dir = results_dir.get_method_output_dir(
         scene,
         args.method,
         init_method,
         args.init_method_config,
         config_name,
     )
+    return ResolvedCombination(
+        output_dir=output_dir,
+        config_name=config_name,
+        config=config,
+        nerfbaselines_data_value=nerfbaselines_data_val,
+        extra_tags=extra_tags,
+    )
+
+
+def process_combination(
+    scene: str,
+    init_method: str,
+    config: ParamList,
+    args: IVDRunnerArguments,
+    eval_all_iters: list[int],
+    subprocess_env: dict[str, str],
+):
+    print(
+        ANSIEscapes.format("_" * 80, "bold"),
+        ANSIEscapes.format("=" * 80 + "\n", "blue"),
+        sep="\n",
+    )
+
+    resolved = resolve_trained_output_dir(
+        ResultsDirectory(args.output_dir), init_method, config, scene, args
+    )
+    config_name = resolved.config_name
+    config = resolved.config
+    nerfbaselines_data_val = resolved.nerfbaselines_data_value
+    extra_tags = resolved.extra_tags
+
     # Follow symlinks etc.
-    output_dir = output_dir.resolve()
+    output_dir = resolved.output_dir.resolve()
 
     ansiesc_print(
         f"Processing '{config_name}' on {scene}. (Outputting to: {output_dir})",
