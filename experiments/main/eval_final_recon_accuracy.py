@@ -243,6 +243,16 @@ class Args:
     # verified, correct path.
     tsdf_backend: Literal["gpu", "cpu"] = "cpu"
 
+    # Integer factor by which to downscale the rendered (and TSDF-integrated)
+    # images. 1 (default) renders at full dataset resolution; e.g. 4 renders at
+    # 1/4 the width and height (~16x fewer pixels), which speeds up rendering and
+    # TSDF integration at the cost of geometric detail. Intrinsics are scaled
+    # accordingly.
+    render_downscale: int = 1
+
+    # Enable debug-level logging (e.g. per-scene camera render resolutions).
+    debug: bool = False
+
     # F-score inlier distance threshold, in meters (on the GT / laser-scan
     # scale). A reconstruction/GT point counts as matched when its nearest
     # neighbour in the other cloud is within this distance.
@@ -878,6 +888,7 @@ def process_splats_via_tsdf(
     debug_export_dir: Path | None = None,
     debug_prefix: str = "splats",
     tsdf_backend: str = "gpu",
+    render_downscale: int = 1,
 ) -> PointSet:
     """
     Splat processing path: render a depth + color image from every training
@@ -935,11 +946,55 @@ def process_splats_via_tsdf(
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
         )
 
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        full_sizes = sorted(
+            {(int(w), int(h)) for w, h in zip(cameras.widths, cameras.heights)}
+        )
+        if render_downscale > 1:
+            rendered_sizes = sorted(
+                {
+                    (max(1, int(w) // render_downscale), max(1, int(h) // render_downscale))
+                    for w, h in zip(cameras.widths, cameras.heights)
+                }
+            )
+            _LOGGER.debug(
+                "Rendering %d cameras at 1/%d resolution: full (w, h) %s -> "
+                "rendered (w, h) %s",
+                len(cameras),
+                render_downscale,
+                full_sizes,
+                rendered_sizes,
+            )
+        else:
+            _LOGGER.debug(
+                "Rendering %d cameras at full resolution (w, h): %s",
+                len(cameras),
+                full_sizes,
+            )
+
     render_seconds = 0.0
     integrate_seconds = 0.0
     for cam_idx in range(len(cameras)):
-        width = int(cameras.widths[cam_idx])
-        height = int(cameras.heights[cam_idx])
+        full_width = int(cameras.widths[cam_idx])
+        full_height = int(cameras.heights[cam_idx])
+        K = cameras.Ks[cam_idx]
+        if render_downscale > 1:
+            # Render (and TSDF-integrate) at a lower resolution to save time.
+            # Scale the intrinsics by the actual width/height ratio (which may
+            # differ slightly from 1/render_downscale when the size is not evenly
+            # divisible) so the pinhole model stays consistent with the pixel grid.
+            width = max(1, full_width // render_downscale)
+            height = max(1, full_height // render_downscale)
+            scale_x = width / full_width
+            scale_y = height / full_height
+            K = K.copy()
+            K[0, 0] *= scale_x
+            K[0, 2] *= scale_x
+            K[1, 1] *= scale_y
+            K[1, 2] *= scale_y
+        else:
+            width = full_width
+            height = full_height
         camtoworld = cameras.camtoworlds[cam_idx]
         viewmat = np.linalg.inv(camtoworld)
 
@@ -948,7 +1003,7 @@ def process_splats_via_tsdf(
             viewmat[None], dtype=torch.float32, device=device
         )  # (1, 4, 4)
         Ks = torch.as_tensor(
-            cameras.Ks[cam_idx][None], dtype=torch.float32, device=device
+            K[None], dtype=torch.float32, device=device
         )  # (1, 3, 3)
 
         render_colors, render_alphas, _ = rasterization(
@@ -992,7 +1047,7 @@ def process_splats_via_tsdf(
         integrate_start = time.perf_counter()
         if use_gpu:
             intrinsic = o3c.Tensor(
-                cameras.Ks[cam_idx], dtype=o3c.float64, device=o3c.Device("CPU:0")
+                K, dtype=o3c.float64, device=o3c.Device("CPU:0")
             )
             extrinsic = o3c.Tensor(
                 viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
@@ -1026,10 +1081,10 @@ def process_splats_via_tsdf(
             intrinsic = o3d.camera.PinholeCameraIntrinsic(
                 width,
                 height,
-                cameras.Ks[cam_idx][0, 0],
-                cameras.Ks[cam_idx][1, 1],
-                cameras.Ks[cam_idx][0, 2],
-                cameras.Ks[cam_idx][1, 2],
+                K[0, 0],
+                K[1, 1],
+                K[0, 2],
+                K[1, 2],
             )
             volume.integrate(rgbd, intrinsic, viewmat)
         integrate_seconds += time.perf_counter() - integrate_start
@@ -1221,6 +1276,7 @@ def build_init_reconstruction(
                 debug_export_dir,
                 prefix,
                 tsdf_backend=args.tsdf_backend,
+                render_downscale=args.render_downscale,
             )
         if column.init_method == "edgs":
             # EDGS (and any other splat init): use splat centers.
@@ -1633,6 +1689,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     args = tyro.cli(Args)
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
     _apply_cpu_thread_limit(args.max_cpu_threads)
 
     if args.load_existing:
@@ -1802,6 +1860,7 @@ def main() -> None:
                 debug_export_dir=scene_debug_dir,
                 debug_prefix=prefix,
                 tsdf_backend=args.tsdf_backend,
+                render_downscale=args.render_downscale,
             )
 
             metrics = compute_fscore_metrics(
