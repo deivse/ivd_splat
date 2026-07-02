@@ -59,11 +59,14 @@ DEFAULT_VOXEL_SIZE = 0.02
 
 # GPU TSDF (Open3D tensor ``VoxelBlockGrid``) sparse-hash parameters. Blocks are
 # 16^3 voxels; each voxel stores tsdf + weight + rgb (~20 bytes), so a block is
-# ~80 KB. 80k blocks is ~6.4 GB, comfortably within a 16 GB budget (and far more
-# on the 40 GB cluster GPUs) while giving many more blocks than a room-scale
-# scene needs (the grid errors if exceeded, so it is kept generous).
+# ~80 KB. The grid pre-allocates ``block_count`` blocks up front, and if a scene
+# needs more occupied blocks than that the internal stdgpu buffer overflows and
+# spams ``stdgpu::vector::size ... out of bounds ... Clamping to 0`` warnings
+# (with silently dropped geometry). The count is therefore made a CLI arg
+# (``--tsdf-block-count``) so it can be raised on large-memory GPUs (e.g. the
+# H200) and lowered on smaller ones. 300k blocks is ~24 GB.
 _TSDF_BLOCK_RESOLUTION = 16
-_TSDF_BLOCK_COUNT = 80000
+DEFAULT_TSDF_BLOCK_COUNT = 300000
 # Minimum accumulated voxel weight for a voxel to contribute to the extracted
 # GPU point cloud (Open3D's tensor default is 3.0). Lowered to 1.0 to also keep
 # voxels seen in only a few frames.
@@ -241,6 +244,13 @@ class Args:
     #
     # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume.
     tsdf_backend: Literal["gpu", "cpu"] = "cpu"
+
+    # Number of 16^3 voxel blocks the GPU VoxelBlockGrid pre-allocates (~80 KB
+    # each). Must exceed the number of occupied blocks in a scene or Open3D spams
+    # "stdgpu::vector::size ... out of bounds" warnings and drops geometry. Raise
+    # on large-memory GPUs (300k ~= 24 GB), lower on smaller ones. Only used by
+    # the "gpu" backend.
+    tsdf_block_count: int = DEFAULT_TSDF_BLOCK_COUNT
 
     # Integer factor by which to downscale the rendered (and TSDF-integrated)
     # images. 1 (default) renders at full dataset resolution; e.g. 4 renders at
@@ -888,6 +898,7 @@ def process_splats_via_tsdf(
     debug_prefix: str = "splats",
     tsdf_backend: str = "gpu",
     render_downscale: int = 1,
+    tsdf_block_count: int = DEFAULT_TSDF_BLOCK_COUNT,
 ) -> PointSet:
     """
     Splat processing path: render a depth + color image from every training
@@ -933,7 +944,7 @@ def process_splats_via_tsdf(
             attr_channels=((1,), (1,), (3,)),
             voxel_size=voxel_size,
             block_resolution=_TSDF_BLOCK_RESOLUTION,
-            block_count=_TSDF_BLOCK_COUNT,
+            block_count=tsdf_block_count,
             device=o3d_device,
         )
     else:
@@ -1261,6 +1272,7 @@ def build_init_reconstruction(
                 prefix,
                 tsdf_backend=args.tsdf_backend,
                 render_downscale=args.render_downscale,
+                tsdf_block_count=args.tsdf_block_count,
             )
         if column.init_method == "edgs":
             # EDGS (and any other splat init): use splat centers.
@@ -1845,6 +1857,7 @@ def main() -> None:
                 debug_prefix=prefix,
                 tsdf_backend=args.tsdf_backend,
                 render_downscale=args.render_downscale,
+                tsdf_block_count=args.tsdf_block_count,
             )
 
             metrics = compute_fscore_metrics(
