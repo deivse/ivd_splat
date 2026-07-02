@@ -1338,7 +1338,10 @@ def write_metrics_latex_table(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    # ``force=True`` so we reconfigure even if an imported dependency already
+    # installed a root handler (otherwise basicConfig is a no-op and the root
+    # logger stays at WARNING, dropping our INFO logs).
+    logging.basicConfig(level=logging.INFO, force=True)
     args = tyro.cli(Args)
 
     if args.load_existing:
