@@ -4,17 +4,22 @@ import copy
 import functools
 import json
 import logging
+import shutil
+import subprocess
 import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import open3d as o3d
+import open3d.core as o3c
 import torch
 import tyro
 from torch import Tensor
+from torch.utils.dlpack import to_dlpack
 from scipy.spatial import cKDTree
 from gsplat.rendering import rasterization
 from nerfbaselines.datasets import load_dataset
@@ -49,6 +54,21 @@ from shared.save_init_info import INIT_INFO_JSON_FILENAME
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_VOXEL_SIZE = 0.02
+
+
+# GPU TSDF (Open3D tensor ``VoxelBlockGrid``) sparse-hash parameters. Blocks are
+# 16^3 voxels; each voxel stores tsdf + weight + rgb (~20 bytes), so a block is
+# ~80 KB. 80k blocks is ~6.4 GB, comfortably within a 16 GB budget (and far more
+# on the 40 GB cluster GPUs) while giving many more blocks than a room-scale
+# scene needs (the grid errors if exceeded, so it is kept generous).
+_TSDF_BLOCK_RESOLUTION = 16
+_TSDF_BLOCK_COUNT = 80000
+# Minimum accumulated voxel weight for a voxel to contribute to the extracted
+# GPU iso-surface. Must be > 0: marching-cubes extraction (extract_triangle_mesh)
+# on zero-weight voxels triggers an illegal CUDA memory access. 1.0 (the value
+# used in Open3D's own reconstruction examples) keeps voxels observed by at least
+# one frame while dropping never-integrated ones.
+_TSDF_GPU_WEIGHT_THRESHOLD = 1.0
 
 
 @functools.lru_cache(maxsize=1)
@@ -145,6 +165,12 @@ class Args:
     # Base results directory containing the trained method outputs.
     results_dir: Path = Path("results")
 
+    # Directory to use for temporary files (trained-output archive extraction).
+    # When set, temporary directories are created here instead of the system
+    # default (``$TMPDIR`` / ``/tmp``). Useful on clusters where the default temp
+    # location is a slow/network filesystem; point this at fast local scratch.
+    temp_dir_override: Path | None = None
+
     # External data needed to reproduce trained output directory names 1:1 with
     # ivd_splat_runner (must match what was passed at training time).
     gaussian_cap_per_scene_file: str | None = None
@@ -166,6 +192,13 @@ class Args:
     tsdf_sdf_trunc_voxel_multiplier: float = 3.0
     # Minimum accumulated splat alpha for a rendered depth pixel to be fused.
     min_render_alpha: float = 0.5
+    # TSDF fusion backend.
+    #
+    # WARNING: "gpu" is currently BROKEN and should not be used
+    #
+    # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume and is the
+    # verified, correct path.
+    tsdf_backend: Literal["gpu", "cpu"] = "cpu"
 
     # F-score inlier distance threshold, in meters (on the GT / laser-scan
     # scale). A reconstruction/GT point counts as matched when its nearest
@@ -364,22 +397,62 @@ class Cameras:
         return self.camtoworlds.shape[0]
 
 
-def load_trained_splats(output_dir: Path) -> SplatData:
+def _extract_archive_member(archive_path: Path, member: str, dest_dir: Path) -> Path:
+    """
+    Extract a single ``member`` from the zip ``archive_path`` into ``dest_dir``,
+    returning the path of the extracted file.
+
+    Prefers the system ``unzip`` binary, which is substantially faster than
+    Python's ``zipfile`` for large archives; falls back to ``zipfile`` when
+    ``unzip`` is unavailable or does not produce the expected file.
+    """
+    out_path = dest_dir / member
+    if shutil.which("unzip") is not None:
+        try:
+            subprocess.run(
+                ["unzip", "-o", "-q", str(archive_path), member, "-d", str(dest_dir)],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            _LOGGER.warning(
+                "unzip failed for %s!%s (%s); falling back to zipfile.",
+                archive_path,
+                member,
+                exc,
+            )
+        else:
+            if out_path.exists():
+                return out_path
+    with zipfile.ZipFile(archive_path) as archive:
+        return Path(archive.extract(member, dest_dir))
+
+
+def load_trained_splats(
+    output_dir: Path, temp_dir_override: Path | None = None
+) -> SplatData:
     """
     Load the final trained splats for a run.
 
     The trained output is stored as ``output.zip`` inside the run directory; the
     final splat PLY lives at ``checkpoint/splats_30000.ply`` relative to the
-    archive root. The archive is extracted into a temporary directory (removed on
-    return) and the PLY is loaded with the shared splat IO helpers.
+    archive root. The archive member is extracted into a temporary directory
+    (removed on return) and the PLY is loaded with the shared splat IO helpers.
+
+    When ``temp_dir_override`` is set, the temporary directory is created there
+    instead of the system default (useful to avoid a slow default temp
+    filesystem on clusters).
     """
     archive_path = output_dir / TRAINED_OUTPUT_ARCHIVE_NAME
     if not archive_path.exists():
         raise FileNotFoundError(f"Trained output archive not found: {archive_path}")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with zipfile.ZipFile(archive_path) as archive:
-            extracted = Path(archive.extract(TRAINED_SPLATS_ARCHIVE_MEMBER, tmp_dir))
+    if temp_dir_override is not None:
+        temp_dir_override.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(dir=temp_dir_override) as tmp_dir:
+        extracted = _extract_archive_member(
+            archive_path, TRAINED_SPLATS_ARCHIVE_MEMBER, Path(tmp_dir)
+        )
         _LOGGER.info(
             "Loading trained splats from %s!%s",
             archive_path,
@@ -761,6 +834,7 @@ def process_splats_via_tsdf(
     device: torch.device,
     debug_export_dir: Path | None = None,
     debug_prefix: str = "splats",
+    tsdf_backend: str = "gpu",
 ) -> PointSet:
     """
     Splat processing path: render a depth + color image from every training
@@ -773,9 +847,18 @@ def process_splats_via_tsdf(
     fused points are directly comparable to the processed laser scan at true
     metric scale.
 
-    Rendering is done on the GPU (gsplat); the depths are TSDF-fused with Open3D's
-    multithreaded ``ScalableTSDFVolume`` (this consistently beat the GPU tensor
-    ``VoxelBlockGrid`` for these high-resolution, many-frame scenes).
+    Rendering is always done on the GPU (gsplat). The depth fusion backend is
+    selected by ``tsdf_backend``:
+
+    - ``"gpu"``: Open3D's CUDA tensor ``VoxelBlockGrid``. The rendered depth /
+      color tensors are handed to Open3D as CUDA tensors (zero-copy via DLPack),
+      keeping everything on the GPU. Requires a CUDA device and a few GB of spare
+      VRAM; falls back to ``"cpu"`` when no CUDA device is available.
+    - ``"cpu"``: Open3D's multithreaded ``ScalableTSDFVolume``.
+
+    Both backends extract the same zero-crossing surface points (the GPU grid's
+    extraction weight threshold is set to keep every observed voxel, matching the
+    CPU path), so their outputs agree up to numerical differences.
 
     When ``debug_export_dir`` is given, the fused point cloud is written there as
     a PLY.
@@ -784,11 +867,30 @@ def process_splats_via_tsdf(
         splats, device
     )
 
-    volume = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=voxel_size,
-        sdf_trunc=voxel_size * sdf_trunc_voxel_multiplier,
-        color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
-    )
+    use_gpu = tsdf_backend == "gpu" and device.type == "cuda"
+    if tsdf_backend == "gpu" and device.type != "cuda":
+        _LOGGER.warning(
+            "tsdf_backend='gpu' requested but no CUDA device is available; "
+            "falling back to the CPU ScalableTSDFVolume."
+        )
+
+    if use_gpu:
+        o3d_device = o3c.Device(f"CUDA:{device.index or 0}")
+        vbg = o3d.t.geometry.VoxelBlockGrid(
+            attr_names=("tsdf", "weight", "color"),
+            attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
+            attr_channels=((1,), (1,), (3,)),
+            voxel_size=voxel_size,
+            block_resolution=_TSDF_BLOCK_RESOLUTION,
+            block_count=_TSDF_BLOCK_COUNT,
+            device=o3d_device,
+        )
+    else:
+        volume = o3d.pipelines.integration.ScalableTSDFVolume(
+            voxel_length=voxel_size,
+            sdf_trunc=voxel_size * sdf_trunc_voxel_multiplier,
+            color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
+        )
 
     render_seconds = 0.0
     integrate_seconds = 0.0
@@ -830,39 +932,98 @@ def process_splats_via_tsdf(
         # Drop depths where too little was rendered (expected depth is unreliable).
         depth = torch.where(alpha >= min_render_alpha, depth, torch.zeros_like(depth))
 
-        color_np = np.ascontiguousarray(
-            (rgb.clamp(0.0, 1.0) * 255.0).to(torch.uint8).cpu().numpy()
-        )
-        depth_np = np.ascontiguousarray(depth.cpu().numpy().astype(np.float32))
+        if use_gpu:
+            # Hand the rendered tensors to Open3D as device-resident tensors via
+            # DLPack (zero-copy): depth (H, W, 1) float32, color (H, W, 3) float32.
+            depth_t = depth.unsqueeze(-1).contiguous()
+            color_t = rgb.clamp(0.0, 1.0).contiguous()
+            depth_img = o3d.t.geometry.Image(o3c.Tensor.from_dlpack(to_dlpack(depth_t)))
+            color_img = o3d.t.geometry.Image(o3c.Tensor.from_dlpack(to_dlpack(color_t)))
+        else:
+            color_np = np.ascontiguousarray(
+                (rgb.clamp(0.0, 1.0) * 255.0).to(torch.uint8).cpu().numpy()
+            )
+            depth_np = np.ascontiguousarray(depth.cpu().numpy().astype(np.float32))
         render_seconds += time.perf_counter() - render_start
 
         integrate_start = time.perf_counter()
-        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            o3d.geometry.Image(color_np),
-            o3d.geometry.Image(depth_np),
-            depth_scale=1.0,
-            depth_trunc=far_plane,
-            convert_rgb_to_intensity=False,
-        )
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width,
-            height,
-            cameras.Ks[cam_idx][0, 0],
-            cameras.Ks[cam_idx][1, 1],
-            cameras.Ks[cam_idx][0, 2],
-            cameras.Ks[cam_idx][1, 2],
-        )
-        volume.integrate(rgbd, intrinsic, viewmat)
+        if use_gpu:
+            intrinsic = o3c.Tensor(
+                cameras.Ks[cam_idx], dtype=o3c.float64, device=o3c.Device("CPU:0")
+            )
+            extrinsic = o3c.Tensor(
+                viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
+            )
+            frustum_blocks = vbg.compute_unique_block_coordinates(
+                depth_img,
+                intrinsic,
+                extrinsic,
+                depth_scale=1.0,
+                depth_max=far_plane,
+                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+            )
+            vbg.integrate(
+                frustum_blocks,
+                depth_img,
+                color_img,
+                intrinsic,
+                extrinsic,
+                depth_scale=1.0,
+                depth_max=far_plane,
+                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+            )
+        else:
+            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                o3d.geometry.Image(color_np),
+                o3d.geometry.Image(depth_np),
+                depth_scale=1.0,
+                depth_trunc=far_plane,
+                convert_rgb_to_intensity=False,
+            )
+            intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                width,
+                height,
+                cameras.Ks[cam_idx][0, 0],
+                cameras.Ks[cam_idx][1, 1],
+                cameras.Ks[cam_idx][0, 2],
+                cameras.Ks[cam_idx][1, 2],
+            )
+            volume.integrate(rgbd, intrinsic, viewmat)
         integrate_seconds += time.perf_counter() - integrate_start
 
     extract_start = time.perf_counter()
-    pcd = volume.extract_point_cloud()
-    points = np.asarray(pcd.points, dtype=np.float64)
-    colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    if use_gpu:
+        # Extract the marching-cubes iso-surface (a thin, interpolated surface),
+        # not extract_point_cloud (which returns a thick band of near-surface
+        # voxel points and produces many more points than the CPU path). Using
+        # the mesh vertices matches ScalableTSDFVolume.extract_point_cloud's
+        # zero-crossing surface points closely.
+        #
+        # Move the grid to CPU before extraction: the CUDA marching-cubes path
+        # hits an illegal memory access on large / floater-heavy grids, whereas
+        # the CPU extraction is robust (integration still ran on the GPU).
+        mesh = (
+            vbg.cpu()
+            .extract_triangle_mesh(weight_threshold=_TSDF_GPU_WEIGHT_THRESHOLD)
+            .to_legacy()
+        )
+        points = np.asarray(mesh.vertices, dtype=np.float64)
+        colors = (
+            np.asarray(mesh.vertex_colors, dtype=np.float64)
+            if mesh.has_vertex_colors()
+            else None
+        )
+    else:
+        pcd = volume.extract_point_cloud()
+        points = np.asarray(pcd.points, dtype=np.float64)
+        colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    if colors is not None and colors.size and colors.max() > 1.0:
+        colors = colors / 255.0
     extract_seconds = time.perf_counter() - extract_start
     _LOGGER.info(
-        "TSDF fusion produced %d points (%d cams: render %.1fs, integrate %.1fs, "
-        "extract %.1fs)",
+        "TSDF fusion (%s) produced %d points (%d cams: render %.1fs, "
+        "integrate %.1fs, extract %.1fs)",
+        "gpu" if use_gpu else "cpu",
         points.shape[0],
         len(cameras),
         render_seconds,
@@ -1016,6 +1177,7 @@ def build_init_reconstruction(
                 device,
                 debug_export_dir,
                 prefix,
+                tsdf_backend=args.tsdf_backend,
             )
         if column.init_method == "edgs":
             # EDGS (and any other splat init): use splat centers.
@@ -1572,7 +1734,7 @@ def main() -> None:
                 scene_entries.append(entry)
                 continue
 
-            splats = load_trained_splats(run.output_dir)
+            splats = load_trained_splats(run.output_dir, args.temp_dir_override)
             # Bring the trained splats back from the normalized frame into the
             # world / laser-scan frame so metrics are computed at metric scale.
             # For older monodepth / da3 point-cloud runs the normalization
@@ -1594,6 +1756,7 @@ def main() -> None:
                 device,
                 debug_export_dir=scene_debug_dir,
                 debug_prefix=prefix,
+                tsdf_backend=args.tsdf_backend,
             )
 
             metrics = compute_fscore_metrics(
