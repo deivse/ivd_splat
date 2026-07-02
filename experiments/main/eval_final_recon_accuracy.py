@@ -300,7 +300,7 @@ def resolve_runs_for_scene(
             # Special case - base SfM with this strat has no cap.
             if (
                 column.init_method == "sfm"
-                and len(param_list_list) == 0
+                and len(param_list_list) == 1
                 and param_list_list[0]
                 == (
                     "strategy",
