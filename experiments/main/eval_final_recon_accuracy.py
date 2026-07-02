@@ -308,6 +308,7 @@ def resolve_runs_for_scene(
                 )
             ):
                 runner_args_copy.gaussian_cap_per_scene_file = None
+                runner_args_copy.extra_tags = []
 
             resolved = resolve_trained_output_dir(
                 results_dir, column.init_method, param_list, scene, runner_args_copy
