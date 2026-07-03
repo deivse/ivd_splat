@@ -47,6 +47,11 @@ for strategy in $ALL_STRATEGIES; do
         "dense_init.include_sparse={True} dense_init.target_points_fraction={$INIT_FRACTIONS}" \
         "$GT_DATASETS_EXCEPT_ETH3D"
 
+    ## With include sparse for practical init eval (mostly overlaps with above)
+    train_strat_with_laser_scan $REAL_INIT_NUM_POINTS_PER_SCENE_FILE \
+        "dense_init.include_sparse={True}" \
+        "$GT_DATASETS_EXCEPT_ETH3D"
+
     if [ "$strategy" != "DefaultWithoutADCStrategy" ]; then
         ############### Laser Scan + Noise ###############
         train_strat_with_laser_scan \
