@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, make_dataclass, replace
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
 
 from eval_scripts.common.ansi_escapes import ANSIEscapes, ansiesc_print
 import matplotlib.pyplot as plt
@@ -21,7 +21,6 @@ from results_scripts.base import (
 )
 from results_scripts.param_conversions import PARAM_CONVERSIONS
 from results_scripts.plots import (
-    grouped_per_metric_barplots_for_each_config,
     grouped_per_metric_line_charts_for_each_config,
 )
 from results_scripts.tables import (
@@ -42,7 +41,6 @@ from results_scripts.constants import (
     LOWER_IS_BETTER_METRICS,
     METRIC_NAME_MAP,
     METRIC_PRETTY_NAMES,
-    PLOT_RANGES_PER_METRIC,
     STRATEGY_NAMES,
     TABLE_ROUNDING_PER_METRIC,
     TRACKING_URI,
@@ -64,7 +62,7 @@ from results_scripts.tables import (
 from results_scripts.base import get_cache_dir, load_or_download_runs
 from results_scripts.utils import (
     OutputDirHelper,
-    fraction_name,
+    gmax_fraction_label,
     load_json,
     name_to_path,
     save_figure_svg,
@@ -166,7 +164,7 @@ class ResultsContext:
             cache_path = (
                 cache_dir
                 / "datasets"
-                / f"{name_to_path(dataset, allow_subdirs=False)}_{args.max_eval_iter or 'all'}.pkl"
+                / f"{name_to_path(dataset, allow_subdirs=False)}_{args.max_eval_iter if args.max_eval_iter is not None else 'all'}.pkl"
             )
             runs_per_dataset[dataset] = load_or_download_runs(
                 cache_path=cache_path,
@@ -315,9 +313,9 @@ def laser_scan_tables(
 
     COL_SFM = "SfM"
     COL_AS_SFM = "$|\\mathcal{G}_\\mathit{init}^\\text{SfM}|$"
-    COL_0_5 = "$0.5\\mathcal{G}_\\mathit{max}$"
-    COL_0_75 = "$.75\\mathcal{G}_\\mathit{max}$"
-    COL_1_0 = "$1.0\\mathcal{G}_\\mathit{max}$"
+    COL_0_5 = gmax_fraction_label("0.5")
+    COL_0_75 = gmax_fraction_label("0.75")
+    COL_1_0 = gmax_fraction_label("1.0")
     COL_PER_FRACTION = {
         "0.5": COL_0_5,
         "0.75": COL_0_75,
@@ -463,7 +461,7 @@ def improvement_tables(
     # ``gt_only`` methods (e.g. laser scan) are silently skipped for non-GT datasets.
     init_method_specs: dict[str, dict[str, Any]] = {
         "laser_scan": {
-            "label": r"$0.75G_\mathit{max}$ Laser",
+            "label": rf"{gmax_fraction_label('0.75')} Laser",
             "params": {
                 "dense_init.target_points_fraction": "0.75",
                 "init_method": "laser_scan",
@@ -862,7 +860,8 @@ def noise_resiliency(ctx: ResultsContext, format_options: FormatOptions) -> None
             format_options,
             combined_caption=(
                 "Noise resiliency of laser scan initialization across strategies "
-                "and position noise levels using Laser Scan init with $0.5\\mathcal{G}_\\mathit{max}$ initial points."
+                "and position noise levels using Laser Scan init with "
+                f"{gmax_fraction_label('0.5')} initial points."
             ),
             combined_label="noise_resiliency",
         ),
@@ -1245,10 +1244,7 @@ def practical_tables(
     )
     print(f"Saved Practical Initialization table to {path}")
 
-    if (
-        cfg.include_sparse_for_all != "yes"
-        or cfg.include_half_init_size_for_all != "yes"
-    ):
+    if cfg.include_sparse_for_all != "no" or cfg.include_half_init_size_for_all != "no":
         print("Skipping training times table.")
         return
 
@@ -1271,45 +1267,52 @@ def practical_tables(
     print(f"Saved Training Times table to {path}")
 
 
-def generate_gaussian_cap_fraction_gt(ctx: ResultsContext) -> None:
+def gaussian_cap_ablation(ctx: ResultsContext, format_options: FormatOptions) -> None:
+    # Two fully separate tables, one per init method: SfM and laser scan at
+    # 0.5 G_max. Each table has a subtable per dataset, with strategies in rows
+    # and side-by-side metric triplets (PSNR/SSIM/LPIPS) for the cap fractions.
     init_method_args: dict[str, dict[str, object]] = {
+        "sfm": {
+            "init_method": "sfm",
+        },
         "laser_scan": {
             "init_method": "laser_scan",
             "init_size_matches_gmax": True,
             "dense_init.target_points_fraction": "0.5",
-        },
-        "sfm": {
-            "init_method": "sfm",
+            "dense_init.include_sparse": False,
         },
     }
+    init_method_captions = {
+        "sfm": "SfM initialization",
+        "laser_scan": f"Laser scan initialization at {gmax_fraction_label('0.5')}",
+    }
 
-    for init_method in ["laser_scan", "sfm"]:
+    cap_fractions = ["0.75", "1.0", "1.25"]
+    # LaTeX-safe column labels (fraction of the Gaussian cap relative to G_max).
+    cap_fraction_labels = {cap: gmax_fraction_label(cap) for cap in cap_fractions}
+
+    for init_method, extra_args in init_method_args.items():
         print("========== Init method:", init_method, "==========")
-        section_subdir = f"gaussian_cap_fractions/gt/{init_method}"
+
+        tables: dict[str, str] = {}
         for dataset in LASER_DATASETS:
             print("Dataset:", dataset)
             runs = ctx.runs_per_dataset[dataset].copy()
             data: dict[str, dict[str, pd.DataFrame]] = {}
 
-            for strategy in [
-                "DefaultWithGaussianCapStrategy",
-                "INRIAStrategy",
-                "MCMCStrategy",
-                "IDHFRStrategy",
-                "RevDGSStrategy",
-            ]:
+            for strategy in ALL_STRATEGIES_EXCEPT_NO_D:
                 strategy_common = {
                     "is_default_strategy_config": True,
                     "strategy": strategy,
                     "init.position_noise_std": "0.0",
-                    **init_method_args[init_method],
+                    **extra_args,
                 }
-                for cap_fraction in ["0.75", "1.0", "1.25"]:
+                for cap_fraction in cap_fractions:
                     metrics_for_cap = runs.get_per_scene_metrics_for_params(
                         {**strategy_common, "gaussian_cap_fraction": cap_fraction}
                     )
                     data.setdefault(STRATEGY_NAMES[strategy], {})[
-                        fraction_name(cap_fraction)
+                        cap_fraction_labels[cap_fraction]
                     ] = metrics_for_cap
 
             all_dataframes = [
@@ -1317,36 +1320,32 @@ def generate_gaussian_cap_fraction_gt(ctx: ResultsContext) -> None:
             ]
             drop_scenes_not_present_in_all(*all_dataframes)
 
-            data_means = {
-                strategy: {
-                    cap_fraction: df.mean() for cap_fraction, df in cap_dict.items()
-                }
-                for strategy, cap_dict in data.items()
-            }
-            fig, _, _ = grouped_per_metric_barplots_for_each_config(
-                cast(dict[str, dict[str, pd.DataFrame]], data_means),
-                metrics_to_plot=[
-                    "eval-all-test/psnr",
-                    "eval-all-test/ssim",
-                    "eval-all-test/lpips",
+            tables[dataset] = make_latex_table_for_metrics(
+                data=data,
+                latex_caption=DATASET_NAMES[dataset],
+                latex_label=f"gaussian_cap_ablation_{init_method}_{dataset}",
+                column_order=[cap_fraction_labels[cap] for cap in cap_fractions],
+                row_order=[
+                    STRATEGY_NAMES[strategy] for strategy in ALL_STRATEGIES_EXCEPT_NO_D
                 ],
-                plot_limits_per_metric=PLOT_RANGES_PER_METRIC[dataset],
-                label_all_bars=False,
-                columns=3,
-                figsize=(12, 1.5),
-                legend_y_offset=0.15,
-                padding_factor=0.5,
-                show_legend=False,
-                font_scale=1.5,
-                y_ticks_pad_scale=0.5,
+                format_args=format_options,
+                horizontal_cols_label="Cap frac.",
             )
-            save_figure_svg(
-                fig,
-                ctx.output_helper.get_graph_path(
-                    section_subdir, f"{dataset}_cap_fraction_gt"
+
+        path = ctx.output_helper.get_table_path(f"gaussian_cap_ablation_{init_method}")
+        write_file(
+            path,
+            finalize_per_dataset_tables(
+                tables,
+                format_options,
+                combined_caption=(
+                    "Gaussian cap fraction ablation across strategies and cap "
+                    f"fractions using {init_method_captions[init_method]}."
                 ),
-            )
-            plt.close(fig)
+                combined_label=f"gaussian_cap_ablation_{init_method}",
+            ),
+        )
+        print(f"Saved Gaussian cap ablation ({init_method}) table to {path}")
 
 
 def _ablation(
@@ -1361,7 +1360,7 @@ def _ablation(
     datasets=ALL_DATASETS_WITHOUT_ETH3D,
     caption: str | None = None,
     summary_only: bool = False,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     num_variants = len(args)
     if (num_variants != len(labels)) or (num_variants < 2):
         raise ValueError(
@@ -1375,6 +1374,8 @@ def _ablation(
     all_datasets: list[list[pd.DataFrame]] = [[] for _ in labels]
 
     tables: dict[str, str] = {}
+    # label -> metric -> mean acro
+    means_per_dataset: dict[str, pd.DataFrame] = {dataset: pd.DataFrame(index=labels, columns=metrics) for dataset in datasets}
     for dataset in datasets:
         runs = ctx.runs_per_dataset[dataset].copy()
 
@@ -1398,6 +1399,13 @@ def _ablation(
         for i, label in enumerate(labels):
             for strategy_label in data:
                 all_datasets[i].append(data[strategy_label][label])
+
+        
+        for label in labels:
+            for metric in metrics:
+                means_per_dataset[dataset].loc[label, metric] = float(
+                    series_mean_frame_mean(pd.concat(data[strategy_label][label][metric] for strategy_label in data))
+                )
 
         tables[dataset] = make_latex_table_for_metrics(
             data=data,
@@ -1425,7 +1433,7 @@ def _ablation(
 
     if summary_only:
         print("Skipping table output due to summary_only=True.")
-        return pd.DataFrame([comb_row]).set_index("-")
+        return pd.DataFrame([comb_row]).set_index("-"), means_per_dataset
 
     path = ctx.output_helper.get_table_path(section_name)
     write_file(
@@ -1438,7 +1446,7 @@ def _ablation(
         ),
     )
     print(f"Saved {section_name} ablation table to {path}")
-    return pd.DataFrame([comb_row]).set_index("-")
+    return pd.DataFrame([comb_row]).set_index("-"), means_per_dataset
 
 
 def _cell_data_across_strategies(
@@ -1637,7 +1645,7 @@ def _ablation_strategies_side_by_side(
 def edgs_scale_increase_ablation(
     ctx: ResultsContext, format_options: FormatOptions
 ) -> None:
-    _ablation(
+    _, per_dataset_means = _ablation(
         ctx,
         format_options,
         section_name="edgs_scale_increase_ablation",
@@ -1656,7 +1664,13 @@ def edgs_scale_increase_ablation(
             },
         ],
         labels=["No Scale Increase", "Scale Increase"],
+        strategies=["DefaultWithGaussianCapStrategy", "MCMCStrategy", "IDHFRStrategy"],
     )
+    print("Per-dataset means for EDGS scale increase ablation:")
+    for dataset, means_df in per_dataset_means.items():
+        print(f"Dataset: {dataset}")
+        print(means_df)
+        print()
 
 
 @dataclass
@@ -1777,13 +1791,14 @@ class DA3GSElementsAblationArgs:
 
 
 @section_config(DA3GSElementsAblationArgs)
-def da3_gs_elements_ablation(
+def da3_gs_components_ablation(
     ctx: ResultsContext,
     format_options: FormatOptions,
     cfg: DA3GSElementsAblationArgs,
 ) -> None:
     args = [
         {"is_default_init_config": True},
+        {"splat_init.simulate_point_init": "True"},
         {"splat_init.init_scale_with_knn": "True"},
         {"splat_init.init_scale_isotropic_mean": "True"},
         {"splat_init.opacity_uniform_override": "0.1"},
@@ -1792,11 +1807,12 @@ def da3_gs_elements_ablation(
     ]
     labels = [
         "Base",
+        "Simulate point init",
         "kNN scale",
         "Isotropic scale",
         "uniform opacity",
         "Rotation noise 45°",
-        "Color noise 0.5"
+        "Color noise 0.5",
     ]
 
     common_args: dict[str, Any] = {
@@ -1813,8 +1829,8 @@ def da3_gs_elements_ablation(
     _ablation_strategies_side_by_side(
         ctx,
         format_options,
-        section_name="da3_gs_elements_ablation",
-        caption=r"Ablation on $\text{DA3}^\text{GS}$ initializationcomponents.",
+        section_name="da3_gs_components_ablation",
+        caption=r"Ablation on $\text{DA3}^\text{GS}$ initialization components.",
         common_args=common_args,
         args=args,
         labels=labels,
@@ -1844,13 +1860,14 @@ def idhfr_means_lr_ablation(ctx: ResultsContext, format_options: FormatOptions) 
         ],
         labels=["Default LR", "LR 4e-05"],
         strategies=["IDHFRStrategy"],
+        datasets=ALL_DATASETS,
     )
 
 
 def da3_floater_removal_ablation(
     ctx: ResultsContext, format_options: FormatOptions
 ) -> None:
-    _ablation(
+    _, per_dataset_means = _ablation(
         ctx,
         format_options,
         section_name="da3_floater_removal_ablation",
@@ -1858,6 +1875,9 @@ def da3_floater_removal_ablation(
             "init_method": "da3",
             "gaussian_cap_fraction": "1.0",
             "is_default_strategy_config": True,
+            "is_default_init_config": True,
+            "dense_init.target_points_fraction": "1.0",
+            "dense_init.include_sparse": False,
         },
         args=[
             {
@@ -1869,6 +1889,11 @@ def da3_floater_removal_ablation(
         ],
         labels=["No F.R.", "F.R."],
     )
+    print("Per-dataset means for DA3 floater removal ablation:")
+    for dataset, means_df in per_dataset_means.items():
+        print(f"Dataset: {dataset}")
+        print(means_df)
+        print()
 
 
 def dense_init_half_size_ablation(
@@ -1892,7 +1917,7 @@ def dense_init_half_size_ablation(
     rows: list[pd.DataFrame] = []
     for init_method in ["monodepth", "da3", "da3_gs"]:  # "laser_scan"]:
         print(f"========== Init method: {init_method} ==========")
-        comb_row = _ablation(
+        comb_row, _ = _ablation(
             ctx,
             format_options,
             section_name=f"dense_init_half_size_ablation_{init_method}",
@@ -2020,11 +2045,11 @@ SECTION_FUNCTIONS: list[SectionFn] = [
     init_times,
     # Ablations:
     noise_resiliency,
-    da3_gs_elements_ablation,
+    da3_gs_components_ablation,
     da3_floater_removal_ablation,
     edgs_scale_increase_ablation,
     idhfr_means_lr_ablation,
-    generate_gaussian_cap_fraction_gt,
+    gaussian_cap_ablation,
     init_scale_ablation,
     color_similarity_scale_increase_ablation,
     dense_init_half_size_ablation,
@@ -2059,7 +2084,13 @@ DEFAULT_SECTION_FORMAT_OVERRIDES = {
         table_env_override="table",
         resizebox=True,
     ),
-    da3_gs_elements_ablation.__name__: FormatOptions(
+    da3_gs_components_ablation.__name__: FormatOptions(
+        cell_type=TableCellType.mean,
+        metrics_layout=MetricsLayout.horizontal,
+        table_env_override="table",
+        resizebox=True,
+    ),
+    gaussian_cap_ablation.__name__: FormatOptions(
         cell_type=TableCellType.mean,
         metrics_layout=MetricsLayout.horizontal,
         table_env_override="table",

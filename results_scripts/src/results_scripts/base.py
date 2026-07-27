@@ -156,9 +156,17 @@ class RunsInfo:
             and not (num_runs_per_scene == num_runs_per_scene.iloc[0]).all()
         ):
             logging.warning(
-                "Different number of runs per scene detected: %s",
+                "Different number of runs per scene detected for scenes: %s",
                 num_runs_per_scene.unique(),
             )
+            logging.warning("Params: %s", params)
+            baseline_num_runs = num_runs_per_scene.max()
+            logging.warning(
+                "Scenes with fewer_runs than baseline (%d):", baseline_num_runs
+            )
+            for scene, count in num_runs_per_scene.items():
+                if count < baseline_num_runs:
+                    logging.warning(" - %s: %d runs", scene, count)
 
         if "eval_iter" in runs_with_params.df.columns:
             num_runs_per_eval_iter = runs_with_params.df["eval_iter"].value_counts()

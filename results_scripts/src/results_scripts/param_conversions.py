@@ -63,6 +63,7 @@ PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {
     "splat_init.scale_noise_std_wrt_median": defaulter(None),
     "splat_init.rotation_noise_angle_std_deg": defaulter(None),
     "splat_init.color_noise_std": defaulter(None),
+    "splat_init.simulate_point_init": defaulter("False"),
 }
 
 INIT_METHOD_PARAM_CONVERSIONS: dict[str, typing.Callable[[typing.Any], typing.Any]] = {

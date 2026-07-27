@@ -93,6 +93,67 @@ def _truncated_colormap(
     )
 
 
+# ``colortbl``'s ``\cellcolor`` renders cell text misaligned under the ``llncs``
+# document class (the cell content is not properly centered). Wrapping each cell
+# in a ``\multicolumn`` whose column preamble applies ``\columncolor`` fixes the
+# alignment. To keep the generated LaTeX readable, cells are emitted through the
+# ``\cc`` macro (defined in the document preamble) rather than the raw wrapper::
+#
+#     \newcommand{\cc}[2]{%
+#         \multicolumn{1}{>{\columncolor[HTML]{#1}\centering\arraybackslash}c}{#2}}
+#
+# so a cell becomes ``\cc{FBDCCC}{\color[HTML]{000000} $51/79/38$}``.
+_NAMED_COLORS_HEX = {"white": "FFFFFF", "black": "000000"}
+
+# Matches a single ``{\cellcolor...}`` wrapper (HTML hex or named color) plus any
+# trailing whitespace, as emitted by pandas' Styler with ``convert_css=True``.
+_CELLCOLOR_WRAP_RE = re.compile(
+    r"\{\\cellcolor(\[HTML\]\{[0-9A-Fa-f]{6}\}|\{[A-Za-z]+\})\}\s*"
+)
+
+
+def _cellcolor_spec_to_hex(spec: str) -> str:
+    """Convert a ``\\cellcolor`` argument (``[HTML]{RRGGBB}`` or ``{name}``) to hex."""
+    html_match = re.match(r"\[HTML\]\{([0-9A-Fa-f]{6})\}", spec)
+    if html_match:
+        return html_match.group(1).upper()
+    name_match = re.match(r"\{([A-Za-z]+)\}", spec)
+    if name_match:
+        return _NAMED_COLORS_HEX.get(name_match.group(1).lower(), "FFFFFF")
+    return "FFFFFF"
+
+
+def _cellcolor_cell_to_macro(cell: str) -> str:
+    """Rewrite one table cell from ``\\cellcolor`` form to the ``\\cc`` macro.
+
+    Cells without a ``\\cellcolor`` (e.g. row labels) are returned unchanged. When
+    several ``\\cellcolor`` wrappers stack (a null cell is colored by the gradient
+    then overridden white), the *last* one wins, matching LaTeX's own semantics.
+    """
+    cell = cell.strip()
+    specs = [m.group(1) for m in _CELLCOLOR_WRAP_RE.finditer(cell)]
+    if not specs:
+        return cell
+    bg_hex = _cellcolor_spec_to_hex(specs[-1])
+    body = _CELLCOLOR_WRAP_RE.sub("", cell).strip()
+    return rf"\cc{{{bg_hex}}}{{{body}}}"
+
+
+def _cellcolors_to_macro(tabular: str) -> str:
+    """Convert every ``\\cellcolor`` body row in a tabular to ``\\cc`` macro calls."""
+    out_lines: list[str] = []
+    for line in tabular.splitlines():
+        content = line.strip()
+        if "\\cellcolor" not in content or not content.endswith("\\\\"):
+            out_lines.append(line)
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        cells = content[:-2].rstrip().split("&")
+        converted = " & ".join(_cellcolor_cell_to_macro(c) for c in cells)
+        out_lines.append(f"{indent}{converted} \\\\")
+    return "\n".join(out_lines)
+
+
 def tabular_colored_from_numeric_with_custom_text(
     top_left_label: str,
     table: pd.DataFrame,
@@ -250,6 +311,10 @@ def tabular_colored_from_numeric_with_custom_text(
         midrule_index = next(i for i, ln in enumerate(lines) if r"\midrule" in ln)
         lines.insert(midrule_index + 2, r"\midrule")
         tabular_only = "\n".join(lines)
+
+    # Replace ``\cellcolor`` (which misaligns cell text under ``llncs``) with the
+    # ``\cc`` macro backed by ``\columncolor``; see ``_cellcolors_to_macro``.
+    tabular_only = _cellcolors_to_macro(tabular_only)
 
     return tabular_only
 

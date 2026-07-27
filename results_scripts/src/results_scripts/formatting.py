@@ -32,7 +32,7 @@ class FormatOptions:
     cell_type: TableCellType = TableCellType.std
     table_size: Literal["default", "small"] = "small"
     resizebox: bool = True
-    tabcolsep_fraction: float = 0.8
+    tabcolsep_fraction: float = 2.5
     # How to arrange metrics in multi-metric tables: "stacked" places one
     # tabular section per metric vertically; "side_by_side" lays the metrics out
     # horizontally as \multicolumn groups within a single tabular.
