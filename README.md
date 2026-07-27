@@ -1,5 +1,5 @@
-# Official implementation for "The Role and Relationship of Initialization and Densification in 3D Gaussian Splatting".
-This is the official implementation for the paper "The Role and Relationship of Initialization and Densification in 3D Gaussian Splatting" (https://arxiv.org/abs/2603.20714), which deals with benchmarking 3DGS performance under different initialization and densification strategies.
+# Official implementation for "The Role of Initialization in 3D Gaussian Splatting".
+This is the official implementation for the paper "The Role of Initialization in 3D Gaussian Splatting" (https://arxiv.org/abs/2603.20714), which deals with analyzing 3DGS performance under different initialization and densification strategies.
 
 
 # Installation
