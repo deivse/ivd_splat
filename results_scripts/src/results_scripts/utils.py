@@ -53,6 +53,20 @@ def fraction_name(fraction: str | float) -> str:
     return f"{float(fraction) * 100:.0f}% $G_\\mathit{{max}}$"
 
 
+def gmax_fraction_label(fraction: str | float) -> str:
+    """LaTeX label for a multiple of the max Gaussian count, e.g.
+    ``$0.75\\mathcal{G}_\\mathit{max}$``.
+
+    Used as the canonical notation for "fraction of $\\mathcal{G}_\\mathit{max}$"
+    across all tables so the style stays consistent.
+    """
+    value = float(fraction)
+    text = f"{value:g}"
+    if "." not in text:
+        text += ".0"
+    return rf"${text}\text  {{G}}_\mathit{{m}}$"
+
+
 def save_figure_svg(
     fig: plt.Figure,
     output: Path,
