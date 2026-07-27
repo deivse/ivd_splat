@@ -17,6 +17,7 @@ from typing import Literal
 import numpy as np
 import open3d as o3d
 import open3d.core as o3c
+from results_scripts.constants import STRATEGY_NAMES
 import torch
 import tyro
 from torch import Tensor
@@ -1544,6 +1545,19 @@ def _latex_escape_label(text: str) -> str:
     return "".join(replacements.get(c, c) for c in text)
 
 
+def _latex_format_col_label(text: str) -> str:
+    label = _latex_escape_label(text)
+    return label.replace("=default", "")
+
+
+def _latex_format_row_label(text: str) -> str:
+    label = _latex_escape_label(text)
+    label = label.replace("strategy=", "")
+    for strat, name in STRATEGY_NAMES.items():
+        label = label.replace(strat, name)
+    return label
+
+
 def _combined_header_label(metric_keys: list[str]) -> str:
     """
     Build the top-left header label for the combined-metric table, e.g.
@@ -1630,8 +1644,8 @@ def write_metrics_latex_table(
                     break
         return float(np.mean(values)) if values else float("nan")
 
-    row_labels = [_latex_escape_label(s) for s in strategies_raw]
-    col_labels = [_latex_escape_label(c) for c in columns_raw]
+    row_labels = [_latex_format_row_label(s) for s in strategies_raw]
+    col_labels = [_latex_format_col_label(c) for c in columns_raw]
 
     color_metric = metric_keys[0]
     color_table = pd.DataFrame(index=row_labels, columns=col_labels, dtype=float)
@@ -1651,6 +1665,16 @@ def write_metrics_latex_table(
                 parts.append("--" if np.isnan(value) else f"{value:.{rounding}f}")
             text_table.loc[row_label, col_label] = "$" + " / ".join(parts) + "$"
 
+    # Blank the "At Init" laser-scan cell(s): scoring the laser-scan init points
+    # against the laser scan itself is a trivial perfect 100 that both squashes
+    # the color gradient and is misleading, so it is rendered as an empty white
+    # cell instead. Nulling it here also removes it from the color range.
+    at_init_label = _latex_escape_label(AT_INIT_ROW_LABEL)
+    if at_init_label in color_table.index:
+        for column_raw, col_label in zip(columns_raw, col_labels):
+            if column_raw.startswith("laser_scan="):
+                color_table.loc[at_init_label, col_label] = np.nan
+
     # Flip the gradient for lower-is-better color metrics so "better" stays warm.
     numeric_for_color = (
         -color_table if color_metric in LOWER_IS_BETTER_METRICS else color_table
@@ -1661,6 +1685,7 @@ def write_metrics_latex_table(
         numeric_for_color,
         text_table,
         cmap=VALUE_CMAP,
+        hide_nulls=False,
     )
     latex = wrap_tabulars_as_float(
         [tabular],
