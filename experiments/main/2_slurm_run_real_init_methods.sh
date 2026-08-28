@@ -16,20 +16,18 @@ source "$REPO_PATH/experiments/common_slurm_setup.sh"
 source "$REPO_PATH/experiments/main/common_vars.sh"
 
 #######################################################################
-    
-# No eth3d for now due to lack of non-uniform image sizes support in EDGS
 
-init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+init_runner --datasets $ALL_DATASETS \
     --method da3 \
     --output-dir $RESULTS_DIR \
     --configs "<default>" "floater_removal={True}" "output_gaussians={True} max_num_images={150}"
 
-init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+init_runner --datasets $ALL_DATASETS \
     --method edgs \
     --output-dir $RESULTS_DIR \
     --configs "<default>" "full_sh_init={True}"
 
-init_runner --datasets $ALL_DATASETS_EXCEPT_ETH3D \
+init_runner --datasets $ALL_DATASETS \
     --method monodepth \
     --output-dir $RESULTS_DIR \
     --extra-args="--ignore-depth-cache=True" # So runtimes are real.
