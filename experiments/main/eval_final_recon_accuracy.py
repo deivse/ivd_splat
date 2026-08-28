@@ -606,6 +606,16 @@ class SceneGeometryInputs:
     # 4x4 world -> normalized-frame transform (the frame the trained splats live
     # in); its inverse maps splats back into the world frame.
     transform: np.ndarray
+    # For ETH3D scenes: path to the scene's MeshLab project (``scan_alignment.mlp``)
+    # defining the ground-truth laser-scan poses, used by the official
+    # ETH3DMultiViewEvaluation tool. ``None`` for non-ETH3D datasets.
+    eth3d_meshlab_project_path: Path | None = None
+
+    @property
+    def is_eth3d(self) -> bool:
+        """Whether this scene is scored by the external ETH3D tool (vs the
+        in-house F-score against the processed laser scan)."""
+        return self.eth3d_meshlab_project_path is not None
 
 
 def compute_normalization_transform(
@@ -665,6 +675,8 @@ def load_scene_geometry_inputs(scene: str) -> SceneGeometryInputs:
     # load_pointcloud_ply already returns colors in the [0, 1] range (or None).
     colors = np.asarray(rgbs, dtype=np.float64) if rgbs is not None else None
 
+    eth3d_mlp = dataset["metadata"].get("eth3d_meshlab_project_path")
+
     return SceneGeometryInputs(
         laser_points_world=np.asarray(points, dtype=np.float64),
         laser_colors=colors,
@@ -672,6 +684,7 @@ def load_scene_geometry_inputs(scene: str) -> SceneGeometryInputs:
         sfm_colors=sfm_colors,
         cameras=cameras,
         transform=transform,
+        eth3d_meshlab_project_path=Path(eth3d_mlp) if eth3d_mlp is not None else None,
     )
 
 
@@ -1182,12 +1195,33 @@ def _process_point_cloud_reconstruction(
     voxel_size: float,
     debug_export_dir: Path | None = None,
     debug_prefix: str = "init",
+    skip_processing: bool = False,
 ) -> PointSet:
     """
     Make a point-cloud reconstruction comparable to the processed laser scan:
     voxel-downsample on the origin-aligned grid and keep only points visible in
     at least one training camera (same processing as the laser-scan reference).
+
+    When ``skip_processing`` is set (ETH3D mode), the points are passed through
+    unchanged: the external ETH3D tool does its own downsampling / filtering, so
+    it must receive the exact init points.
     """
+    if skip_processing:
+        result = PointSet(
+            points=np.asarray(point_set.points, dtype=np.float64),
+            colors=point_set.colors,
+        )
+        _LOGGER.info(
+            "Init point cloud '%s': %d points (raw, no downsample/visibility filter)",
+            debug_prefix,
+            result.points.shape[0],
+        )
+        if debug_export_dir is not None:
+            _write_point_set_ply(
+                debug_export_dir / f"{debug_prefix}_visible.ply", result
+            )
+        return result
+
     down_points, down_colors = voxel_downsample_aligned(
         np.asarray(point_set.points, dtype=np.float64), point_set.colors, voxel_size
     )
@@ -1235,6 +1269,8 @@ def build_init_reconstruction(
     """
     prefix = _sanitize_for_path(f"init__{column.label}")
 
+    skip_processing = geometry.is_eth3d
+
     if column.init_method == "sfm":
         return _process_point_cloud_reconstruction(
             PointSet(geometry.sfm_points_world, geometry.sfm_colors),
@@ -1242,6 +1278,7 @@ def build_init_reconstruction(
             args.voxel_size,
             debug_export_dir,
             prefix,
+            skip_processing=skip_processing,
         )
     if column.init_method == "laser_scan":
         return _process_point_cloud_reconstruction(
@@ -1250,6 +1287,7 @@ def build_init_reconstruction(
             args.voxel_size,
             debug_export_dir,
             prefix,
+            skip_processing=skip_processing,
         )
 
     init_dir = ResultsDirectory(args.results_dir).get_init_method_output_dir(
@@ -1283,6 +1321,7 @@ def build_init_reconstruction(
                 args.voxel_size,
                 debug_export_dir,
                 prefix,
+                skip_processing=skip_processing,
             )
         raise NotImplementedError(
             f"Init method '{column.init_method}' with splat init type is not supported."
@@ -1296,6 +1335,7 @@ def build_init_reconstruction(
         args.voxel_size,
         debug_export_dir,
         prefix,
+        skip_processing=skip_processing,
     )
 
 
@@ -1528,6 +1568,122 @@ def compute_fscore_metrics(
     }
 
 
+# Name of the official ETH3D multi-view evaluation binary (assumed to be on PATH).
+ETH3D_EVAL_BINARY = "ETH3DMultiViewEvaluation"
+
+
+def _parse_eth3d_metric_line(stdout: str, prefix: str) -> list[float]:
+    """
+    Parse a whitespace-separated list of floats from the ETH3D evaluation output
+    line starting with ``prefix`` (e.g. ``"Accuracies:"``). One value per
+    requested tolerance is emitted, in tolerance order.
+    """
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            values = [float(v) for v in line[len(prefix) :].split()]
+            if not values:
+                break
+            return values
+    raise ValueError(
+        f"Could not parse '{prefix}' from ETH3DMultiViewEvaluation output:\n{stdout}"
+    )
+
+
+def compute_eth3d_metrics(
+    reconstruction: PointSet,
+    meshlab_project_path: Path,
+    threshold_meters: float,
+    temp_dir_override: Path | None = None,
+) -> dict:
+    """
+    Compute geometry metrics for an ETH3D scene using the official
+    ``ETH3DMultiViewEvaluation`` tool instead of the in-house KD-tree F-score.
+
+    The reconstruction points (already in the world / laser-scan frame) are
+    written to a temporary PLY and scored against the ground-truth laser scans
+    referenced by ``meshlab_project_path`` (the scene's ``scan_alignment.mlp``),
+    at a single tolerance of ``threshold_meters``. The tool's ``Accuracies``
+    (precision), ``Completenesses`` (recall) and ``F1-scores`` outputs are parsed
+    and returned in the same shape as ``compute_fscore_metrics``.
+    """
+    if temp_dir_override is not None:
+        temp_dir_override.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(dir=temp_dir_override) as tmp_dir:
+        recon_ply = Path(tmp_dir) / "reconstruction.ply"
+        _write_point_set_ply(recon_ply, reconstruction)
+
+        cmd = [
+            ETH3D_EVAL_BINARY,
+            "--reconstruction_ply_path",
+            str(recon_ply),
+            "--ground_truth_mlp_path",
+            str(meshlab_project_path),
+            "--tolerances",
+            f"{threshold_meters:g}",
+        ]
+        _LOGGER.info("Running ETH3D evaluation: %s", " ".join(cmd))
+        eval_start = time.perf_counter()
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        _LOGGER.info(
+            "ETH3D evaluation (%d recon points) finished in %.1fs",
+            reconstruction.points.shape[0],
+            time.perf_counter() - eval_start,
+        )
+
+    _LOGGER.info(
+        "Raw ETH3DMultiViewEvaluation output:\n%s",
+        "\n".join(f"> {line}" for line in proc.stdout.rstrip().splitlines()),
+    )
+
+    precision = _parse_eth3d_metric_line(proc.stdout, "Accuracies:")[0]
+    recall = _parse_eth3d_metric_line(proc.stdout, "Completenesses:")[0]
+    fscore = _parse_eth3d_metric_line(proc.stdout, "F1-scores:")[0]
+
+    _LOGGER.info(
+        "Parsed ETH3D metrics (tol=%.3f m): precision=%.4f recall=%.4f fscore=%.4f",
+        threshold_meters,
+        precision,
+        recall,
+        fscore,
+    )
+
+    return {
+        "threshold_meters": threshold_meters,
+        "precision": precision,
+        "recall": recall,
+        "fscore": fscore,
+        "num_reconstruction_points": int(reconstruction.points.shape[0]),
+    }
+
+
+def compute_reconstruction_metrics(
+    reconstruction: PointSet,
+    reference: PointSet | None,
+    geometry: SceneGeometryInputs,
+    args: Args,
+) -> dict:
+    """
+    Compute geometry metrics for one reconstruction, dispatching by dataset:
+    ETH3D scenes use the official ``ETH3DMultiViewEvaluation`` tool (via the
+    scene's MeshLab project), everything else uses the in-house KD-tree F-score
+    against the processed laser-scan ``reference``.
+    """
+    if geometry.eth3d_meshlab_project_path is not None:
+        return compute_eth3d_metrics(
+            reconstruction,
+            geometry.eth3d_meshlab_project_path,
+            args.fscore_threshold_meters,
+            args.temp_dir_override,
+        )
+    if reference is None:
+        raise ValueError("A laser-scan reference is required for non-ETH3D scenes.")
+    return compute_fscore_metrics(
+        reconstruction, reference, args.fscore_threshold_meters
+    )
+
+
 def _latex_escape_label(text: str) -> str:
     """Escape LaTeX special characters so config-string labels compile as text."""
     replacements = {
@@ -1699,6 +1855,23 @@ def write_metrics_latex_table(
     _LOGGER.info("Wrote metrics LaTeX table to %s", out_path)
 
 
+def render_latex_table(
+    args: Args, resolved_runs: dict[str, list[dict]], threshold_meters: float
+) -> None:
+    """
+    Write the metrics LaTeX table to ``--latex-output`` (defaulting to the JSON
+    output path with a ``.tex`` suffix), captioned with the inlier threshold.
+    """
+    latex_path = args.latex_output or args.output.with_suffix(".tex")
+    write_metrics_latex_table(
+        resolved_runs,
+        args.latex_metrics,
+        latex_path,
+        caption=f"Reconstruction accuracy (inlier threshold {threshold_meters:g}\\,m)",
+        label="final_recon_fscore",
+    )
+
+
 def main() -> None:
     # ``force=True`` so we reconfigure even if an imported dependency already
     # installed a root handler (otherwise basicConfig is a no-op and the root
@@ -1722,22 +1895,12 @@ def main() -> None:
                 "an existing results file."
             )
         existing = json.loads(args.output.read_text())
-        resolved_runs = existing["resolved_runs"]
         threshold = existing.get(
             "fscore_threshold_meters", args.fscore_threshold_meters
         )
         _LOGGER.info("Loaded existing metrics from %s", args.output)
 
-        latex_path = args.latex_output or args.output.with_suffix(".tex")
-        write_metrics_latex_table(
-            resolved_runs,
-            args.latex_metrics,
-            latex_path,
-            caption=(
-                "Reconstruction accuracy " f"(inlier threshold {threshold:g}\\,m)"
-            ),
-            label="final_recon_fscore",
-        )
+        render_latex_table(args, existing["resolved_runs"], threshold)
         return
 
     columns = build_columns(args)
@@ -1782,15 +1945,19 @@ def main() -> None:
             else None
         )
 
-        # Reference (laser-scan) point set, processed once per scene.
-        reference = process_laser_scan_point_cloud(
-            points_world,
-            colors,
-            cameras,
-            args.voxel_size,
-            debug_export_dir=scene_debug_dir,
-            debug_prefix="laser_scan",
-        )
+        # Reference (laser-scan) point set, processed once per scene. Not needed
+        # for ETH3D scenes, which are scored by the external ETH3D tool instead.
+        if geometry.is_eth3d:
+            reference = None
+        else:
+            reference = process_laser_scan_point_cloud(
+                points_world,
+                colors,
+                cameras,
+                args.voxel_size,
+                debug_export_dir=scene_debug_dir,
+                debug_prefix="laser_scan",
+            )
 
         scene_entries: list[dict] = []
 
@@ -1822,13 +1989,12 @@ def main() -> None:
                     exc,
                 )
             else:
-                init_metrics = compute_fscore_metrics(
-                    init_reconstruction, reference, args.fscore_threshold_meters
+                init_metrics = compute_reconstruction_metrics(
+                    init_reconstruction, reference, geometry, args
                 )
                 init_entry["metrics"] = init_metrics
                 _LOGGER.info(
-                    "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f "
-                    "(thr=%.3f m)",
+                    "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f (thr=%.3f m)",
                     scene,
                     column.label,
                     AT_INIT_ROW_LABEL,
@@ -1885,12 +2051,12 @@ def main() -> None:
                 tsdf_block_count=args.tsdf_block_count,
             )
 
-            metrics = compute_fscore_metrics(
-                reconstruction, reference, args.fscore_threshold_meters
+            metrics = compute_reconstruction_metrics(
+                reconstruction, reference, geometry, args
             )
             entry["metrics"] = metrics
             _LOGGER.info(
-                "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f " "(thr=%.3f m)",
+                "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f (thr=%.3f m)",
                 scene,
                 run.column_label,
                 run.strategy_id,
@@ -1918,17 +2084,7 @@ def main() -> None:
 
     _LOGGER.info("Wrote reconstruction accuracy metrics to %s", args.output)
 
-    latex_path = args.latex_output or args.output.with_suffix(".tex")
-    write_metrics_latex_table(
-        resolved_runs,
-        args.latex_metrics,
-        latex_path,
-        caption=(
-            "Reconstruction accuracy "
-            f"(inlier threshold {args.fscore_threshold_meters:g}\\,m)"
-        ),
-        label="final_recon_fscore",
-    )
+    render_latex_table(args, resolved_runs, args.fscore_threshold_meters)
 
 
 if __name__ == "__main__":
