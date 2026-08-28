@@ -3,7 +3,7 @@
 #SBATCH --output=dist_to_sfm_log.out
 #SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=10
-#SBATCH --mem-per-cpu=1G
+#SBATCH --mem-per-cpu=5G
 #SBATCH --partition=amdfast
 
 export NUMEXPR_MAX_THREADS=10 # Keep in sync with --cpus-per-task!
@@ -20,5 +20,6 @@ python eval_closeness_to_sfm.py \
     --results-dir $RESULTS_DIR \
     --datasets mipnerf360 tanksandtemples \
     --init-methods edgs=default monodepth=default da3=floater_removal=True da3=output_gaussians=True_max_num_images=150 \
-    --debug-export-dir ./debug_closeness_to_sfm
+    --debug-export-dir ./debug_closeness_to_sfm_cutoff_95 \
+    --output closenes_to_sfm_cutoff_95.json
 
