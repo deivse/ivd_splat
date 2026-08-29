@@ -1,3 +1,22 @@
+"""
+Shared helpers for the two-stage final-reconstruction accuracy evaluation.
+
+The evaluation is split into two stages that run as separate scripts:
+
+- ``eval_final_recon_accuracy_gpu.py`` (GPU stage): renders each trained /
+  init reconstruction and fuses depths into a TSDF, producing comparable point
+  sets. These reconstructions (and the processed laser-scan reference) are
+  written to an intermediate directory together with a ``manifest.json``.
+- ``eval_final_recon_accuracy_cpu.py`` (CPU stage): loads the saved
+  reconstructions from the intermediate directory and computes the geometry
+  metrics (KD-tree F-score, or the external ETH3D tool), writing the metrics
+  JSON and the LaTeX table.
+
+This module holds everything both stages share: the point-processing / TSDF
+fusion path, the metrics, the LaTeX table rendering, and the on-disk
+intermediate format (PLY reconstructions + ``manifest.json``).
+"""
+
 from __future__ import annotations
 
 import copy
@@ -10,16 +29,15 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Protocol
 
 import numpy as np
 import open3d as o3d
 import open3d.core as o3c
 from results_scripts.constants import STRATEGY_NAMES
 import torch
-import tyro
 from torch import Tensor
 from torch.utils.dlpack import to_dlpack
 from scipy.spatial import cKDTree
@@ -28,7 +46,6 @@ from nerfbaselines.datasets import load_dataset
 from nerfbaselines.utils import pad_poses
 
 from eval_scripts.common.dataset_scenes import (
-    get_scenes_from_args,
     scene_id_to_nerfbaselines_data_value,
 )
 from eval_scripts.common.results_dir import ResultsDirectory
@@ -82,11 +99,11 @@ def _default_device() -> torch.device:
 
 # Max CPU workers/threads for parallel CPU-bound ops (KD-tree queries, Open3D,
 # torch CPU ops). -1 follows the SciPy KD-tree convention of "use all cores";
-# overridden by --max-cpu-threads via ``_apply_cpu_thread_limit``.
+# overridden by --max-cpu-threads via ``apply_cpu_thread_limit``.
 _CPU_WORKERS = -1
 
 
-def _apply_cpu_thread_limit(max_threads: int | None) -> None:
+def apply_cpu_thread_limit(max_threads: int | None) -> None:
     """
     Limit the number of CPU threads / parallel workers used for CPU-bound work:
     torch CPU intra-op threads, Open3D's parallel ops (TSDF integrate/extract),
@@ -126,6 +143,57 @@ AT_INIT_ROW_LABEL = "At Init"
 # path (relative to the archive root) of the final trained splat PLY within it.
 TRAINED_OUTPUT_ARCHIVE_NAME = "output.zip"
 TRAINED_SPLATS_ARCHIVE_MEMBER = "checkpoint/splats_30000.ply"
+
+# Intermediate (GPU-stage output) layout: the manifest describing every
+# reconstruction and the per-scene laser-scan reference file name.
+MANIFEST_FILENAME = "manifest.json"
+REFERENCE_FILENAME = "reference.ply"
+
+
+class GpuStageArgs(Protocol):
+    """
+    Structural type of the GPU-stage ``Args`` consumed by the shared run
+    resolution / geometry helpers. Declared as a Protocol so this module does
+    not need to import the concrete ``Args`` dataclass (avoiding a circular
+    import).
+
+    The members are read-only properties so the match is covariant: a concrete
+    ``Args`` may narrow an attribute (e.g. ``tsdf_backend: Literal["gpu",
+    "cpu"]`` vs ``str``) and still satisfy the protocol.
+    """
+
+    @property
+    def results_dir(self) -> Path: ...
+    @property
+    def gaussian_cap_per_scene_file(self) -> str | None: ...
+    @property
+    def gaussian_cap_fraction(self) -> float: ...
+    @property
+    def init_size_per_scene_file(self) -> str | None: ...
+    @property
+    def extra_tags(self) -> list[str]: ...
+    @property
+    def eval_iter(self) -> int: ...
+    @property
+    def voxel_size(self) -> float: ...
+    @property
+    def near_plane(self) -> float: ...
+    @property
+    def far_plane(self) -> float: ...
+    @property
+    def tsdf_sdf_trunc_voxel_multiplier(self) -> float: ...
+    @property
+    def min_render_alpha(self) -> float: ...
+    @property
+    def tsdf_backend(self) -> str: ...
+    @property
+    def render_downscale(self) -> int: ...
+    @property
+    def tsdf_block_count(self) -> int: ...
+    @property
+    def init_transform_check_threshold_meters(self) -> float: ...
+    @property
+    def init_transform_fatal_threshold_meters(self) -> float: ...
 
 
 @dataclass
@@ -174,139 +242,17 @@ def parse_init_method(spec: str) -> tuple[str, str]:
     return init_method, init_method_config
 
 
-@dataclass
-class Args:
-    # One column per entry, each "init_method=init_method_config" (the config may
-    # itself contain '='). These are the columns of the output table, e.g.
-    #   --init-methods da3=max_num_images=30 laser_scan=default sfm=default
-    # Required unless --load-existing is set.
-    init_methods: list[str] = field(default_factory=list)
-
-    # ivd-splat training config strings (rows of the table, i.e. densification
-    # strategies), exactly as accepted by `ivd_splat_runner --configs`.
-    # Shared across all columns, optionally with a per-init-method suffix (see
-    # --ivd-splat-config-suffix).
-    ivd_splat_configs: list[str] = field(default_factory=lambda: [""])
-
-    # Optional per-init-method suffix appended to every --ivd-splat-configs entry
-    # for that init method, keyed by the exact --init-methods spec. Example:
-    #   --ivd-splat-configs-suffix da3=default "increase_scale_with_fewer_splats=False"
-    # makes the da3=default column use, for each base config string,
-    #   f"{base_config_string} increase_scale_with_fewer_splats=False".
-    ivd_splat_configs_suffix: dict[str, str] = field(default_factory=dict)
-
-    # Scenes to evaluate, in "dataset/scene" form or as local paths.
-    # Takes precedence over --dataset when non-empty.
-    scenes: list[str] = field(default_factory=list)
-    # Dataset to expand into scenes when --scenes is not given.
-    dataset: str | None = "scannet++"
-
-    # Base results directory containing the trained method outputs.
-    results_dir: Path = Path("results")
-
-    # Directory to use for temporary files (trained-output archive extraction).
-    # When set, temporary directories are created here instead of the system
-    # default (``$TMPDIR`` / ``/tmp``). Useful on clusters where the default temp
-    # location is a slow/network filesystem; point this at fast local scratch.
-    temp_dir_override: Path | None = None
-
-    # Maximum number of CPU threads / parallel workers to use for CPU-bound work
-    # (KD-tree nearest-neighbour queries, Open3D TSDF integration/extraction, and
-    # torch CPU ops). When None, all available cores are used. Set this to avoid
-    # oversubscribing shared cluster nodes.
-    max_cpu_threads: int | None = None
-
-    # External data needed to reproduce trained output directory names 1:1 with
-    # ivd_splat_runner (must match what was passed at training time).
-    gaussian_cap_per_scene_file: str | None = None
-    gaussian_cap_fraction: float = 1.0
-    init_size_per_scene_file: str | None = None
-    extra_tags: list[str] = field(default_factory=list)
-    eval_iter: int = 0
-
-    # Voxel size for point merging, in meters (world / laser-scan frame). Also
-    # used as the TSDF voxel length and the laser-scan downsample voxel size
-    # (both grids are origin-aligned).
-    voxel_size: float = DEFAULT_VOXEL_SIZE
-
-    # gsplat depth-render near/far planes, in meters (world / laser-scan frame).
-    # far_plane also acts as the TSDF depth truncation.
-    near_plane: float = 0.01
-    far_plane: float = 100.0
-    # TSDF signed-distance truncation as a multiple of the voxel size.
-    tsdf_sdf_trunc_voxel_multiplier: float = 3.0
-    # Minimum accumulated splat alpha for a rendered depth pixel to be fused.
-    min_render_alpha: float = 0.5
-    # TSDF fusion backend.
-    #
-    # "gpu" uses Open3D's CUDA tensor VoxelBlockGrid (needs a CUDA device and a
-    # few GB of spare VRAM; auto-falls back to "cpu" when none is available).
-    # Its metrics differ slightly from "cpu".
-    #
-    # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume.
-    tsdf_backend: Literal["gpu", "cpu"] = "cpu"
-
-    # Number of 16^3 voxel blocks the GPU VoxelBlockGrid pre-allocates (~80 KB
-    # each). Must exceed the number of occupied blocks in a scene or Open3D spams
-    # "stdgpu::vector::size ... out of bounds" warnings and drops geometry. Raise
-    # on large-memory GPUs (300k ~= 24 GB), lower on smaller ones. Only used by
-    # the "gpu" backend.
-    tsdf_block_count: int = DEFAULT_TSDF_BLOCK_COUNT
-
-    # Integer factor by which to downscale the rendered (and TSDF-integrated)
-    # images. 1 (default) renders at full dataset resolution; e.g. 4 renders at
-    # 1/4 the width and height (~16x fewer pixels), which speeds up rendering and
-    # TSDF integration at the cost of geometric detail. Intrinsics are scaled
-    # accordingly.
-    render_downscale: int = 1
-
-    # Enable debug-level logging (e.g. per-scene camera render resolutions).
-    debug: bool = False
-
-    # F-score inlier distance threshold, in meters (on the GT / laser-scan
-    # scale). A reconstruction/GT point counts as matched when its nearest
-    # neighbour in the other cloud is within this distance.
-    fscore_threshold_meters: float = 0.05
-
-    # For monodepth / da3 (point-cloud) trained runs, both the SfM-derived and
-    # an init-point-derived normalization transform are tried and the better
-    # aligned one is used. This is the acceptable median init-alignment distance
-    # (meters): if neither transform aligns within it and the two are too close
-    # to distinguish, resolve_world_frame_splats raises.
-    init_transform_check_threshold_meters: float = 0.05
-    init_transform_fatal_threshold_meters: float = 0.1
-
-    # Output JSON file for per-scene and aggregated metrics.
-    output: Path = Path("final_recon_accuracy.json")
-
-    # Skip all recomputation and instead load previously computed metrics from
-    # the --output JSON file, then (re)write the LaTeX table from them. Useful to
-    # re-render the table with different --latex-metrics / --latex-output without
-    # rerunning the (expensive) geometry evaluation.
-    load_existing: bool = False
-
-    # Colored LaTeX F-score table output (rows = densification strategies,
-    # columns = init methods), rendered with the results_scripts table helpers.
-    # Defaults to the JSON output path with a ``.tex`` suffix.
-    latex_output: Path | None = None
-    # Which computed metric(s) to tabulate. All requested metrics are shown in a
-    # single cell separated by '/', in this order (e.g. "F-Score / Precision /
-    # Recall"), and cells are colored by the first metric. Defaults to F-score,
-    # precision and recall; pass e.g. ``--latex-metrics fscore`` for F-score only.
-    latex_metrics: list[str] = field(
-        default_factory=lambda: ["fscore", "precision", "recall"]
-    )
-
-    debug_export_dir: Path | None = None
-
-
-def build_columns(args: Args) -> list[InitMethodColumn]:
+def build_columns(
+    init_methods: list[str],
+    ivd_splat_configs: list[str],
+    ivd_splat_configs_suffix: dict[str, str],
+) -> list[InitMethodColumn]:
     """
-    Build the table columns from --init-methods, appending the optional
-    per-init-method --ivd-splat-config-suffix to each shared --ivd-splat-configs
-    entry.
+    Build the table columns from ``init_methods``, appending the optional
+    per-init-method ``ivd_splat_configs_suffix`` to each shared
+    ``ivd_splat_configs`` entry.
     """
-    unknown = set(args.ivd_splat_configs_suffix) - set(args.init_methods)
+    unknown = set(ivd_splat_configs_suffix) - set(init_methods)
     if unknown:
         raise ValueError(
             "--ivd-splat-config-suffix keys must match --init-methods entries "
@@ -314,12 +260,12 @@ def build_columns(args: Args) -> list[InitMethodColumn]:
         )
 
     columns: list[InitMethodColumn] = []
-    for spec in args.init_methods:
+    for spec in init_methods:
         init_method, init_method_config = parse_init_method(spec)
-        suffix = args.ivd_splat_configs_suffix.get(spec, "")
+        suffix = ivd_splat_configs_suffix.get(spec, "")
         training_configs = [
             (base, f"{base} {suffix}".strip() if suffix else base)
-            for base in args.ivd_splat_configs
+            for base in ivd_splat_configs
         ]
         columns.append(
             InitMethodColumn(
@@ -331,7 +277,9 @@ def build_columns(args: Args) -> list[InitMethodColumn]:
     return columns
 
 
-def _runner_args_for_column(column: InitMethodColumn, args: Args) -> IVDRunnerArguments:
+def _runner_args_for_column(
+    column: InitMethodColumn, args: GpuStageArgs
+) -> IVDRunnerArguments:
     """
     Construct the ivd_splat_runner arguments that reproduce the trained output
     directory names for a given column, mirroring how the runner was invoked.
@@ -368,7 +316,7 @@ class ResolvedRun:
 
 
 def resolve_runs_for_scene(
-    scene: str, columns: list[InitMethodColumn], args: Args
+    scene: str, columns: list[InitMethodColumn], args: GpuStageArgs
 ) -> list[ResolvedRun]:
     """
     Resolve the trained output directories for every (column, strategy) cell of a
@@ -694,7 +642,7 @@ def _sanitize_for_path(name: str) -> str:
 
 
 def _write_point_set_ply(out_path: Path, point_set: PointSet) -> None:
-    """Write a point set to a PLY file (for debugging)."""
+    """Write a point set to a PLY file (for debugging / intermediate storage)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(point_set.points)
@@ -702,10 +650,33 @@ def _write_point_set_ply(out_path: Path, point_set: PointSet) -> None:
         pcd.colors = o3d.utility.Vector3dVector(point_set.colors)
     o3d.io.write_point_cloud(str(out_path), pcd)
     _LOGGER.info(
-        "Exported debug point set (%d points) to %s",
+        "Exported point set (%d points) to %s",
         point_set.points.shape[0],
         out_path,
     )
+
+
+def read_point_set_ply(path: Path) -> PointSet:
+    """Load a ``PointSet`` previously written with ``_write_point_set_ply``."""
+    pcd = o3d.io.read_point_cloud(str(path))
+    points = np.asarray(pcd.points, dtype=np.float64)
+    colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    if colors is not None and colors.size == 0:
+        colors = None
+    return PointSet(points=points, colors=colors)
+
+
+def save_reconstruction_ply(path: Path, point_set: PointSet) -> bool:
+    """
+    Save a reconstruction ``PointSet`` to ``path`` (PLY). Empty point sets are
+    not written (Open3D cannot round-trip a zero-point cloud); returns whether a
+    file was written.
+    """
+    if point_set.points.shape[0] == 0:
+        _LOGGER.warning("Not saving empty reconstruction to %s.", path)
+        return False
+    _write_point_set_ply(path, point_set)
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -1265,7 +1236,7 @@ def _process_point_cloud_reconstruction(
 def build_init_reconstruction(
     column: InitMethodColumn,
     scene: str,
-    args: Args,
+    args: GpuStageArgs,
     geometry: SceneGeometryInputs,
     device: torch.device,
     debug_export_dir: Path | None = None,
@@ -1378,7 +1349,7 @@ _INIT_TRANSFORM_AMBIGUOUS_RATIO = 1.5
 
 
 def _load_init_world_points(
-    column: InitMethodColumn, scene: str, args: Args
+    column: InitMethodColumn, scene: str, args: GpuStageArgs
 ) -> np.ndarray | None:
     """
     Load the raw world-frame point cloud output by a point-cloud init method
@@ -1425,7 +1396,7 @@ def resolve_world_frame_splats(
     splats: SplatData,
     column: InitMethodColumn,
     scene: str,
-    args: Args,
+    args: GpuStageArgs,
     geometry: SceneGeometryInputs,
 ) -> SplatData:
     """
@@ -1691,8 +1662,9 @@ def compute_eth3d_metrics(
 def compute_reconstruction_metrics(
     reconstruction: PointSet,
     reference: PointSet | None,
-    geometry: SceneGeometryInputs,
-    args: Args,
+    eth3d_meshlab_project_path: Path | None,
+    fscore_threshold_meters: float,
+    temp_dir_override: Path | None = None,
 ) -> dict:
     """
     Compute geometry metrics for one reconstruction, dispatching by dataset:
@@ -1700,18 +1672,16 @@ def compute_reconstruction_metrics(
     scene's MeshLab project), everything else uses the in-house KD-tree F-score
     against the processed laser-scan ``reference``.
     """
-    if geometry.eth3d_meshlab_project_path is not None:
+    if eth3d_meshlab_project_path is not None:
         return compute_eth3d_metrics(
             reconstruction,
-            geometry.eth3d_meshlab_project_path,
-            args.fscore_threshold_meters,
-            args.temp_dir_override,
+            eth3d_meshlab_project_path,
+            fscore_threshold_meters,
+            temp_dir_override,
         )
     if reference is None:
         raise ValueError("A laser-scan reference is required for non-ETH3D scenes.")
-    return compute_fscore_metrics(
-        reconstruction, reference, args.fscore_threshold_meters
-    )
+    return compute_fscore_metrics(reconstruction, reference, fscore_threshold_meters)
 
 
 def _latex_escape_label(text: str) -> str:
@@ -1925,250 +1895,44 @@ def write_metrics_latex_table(
 
 
 def render_latex_table(
-    args: Args, resolved_runs: dict[str, list[dict]], threshold_meters: float
+    latex_output: Path | None,
+    output: Path,
+    latex_metrics: list[str],
+    resolved_runs: dict[str, list[dict]],
+    threshold_meters: float,
 ) -> None:
     """
-    Write the metrics LaTeX table to ``--latex-output`` (defaulting to the JSON
-    output path with a ``.tex`` suffix), captioned with the inlier threshold.
+    Write the metrics LaTeX table to ``latex_output`` (defaulting to the JSON
+    ``output`` path with a ``.tex`` suffix), captioned with the inlier threshold.
     """
-    latex_path = args.latex_output or args.output.with_suffix(".tex")
+    latex_path = latex_output or output.with_suffix(".tex")
     write_metrics_latex_table(
         resolved_runs,
-        args.latex_metrics,
+        latex_metrics,
         latex_path,
         caption=f"Reconstruction accuracy (inlier threshold {threshold_meters:g}\\,m)",
         label="final_recon_fscore",
     )
 
 
-def main() -> None:
-    # ``force=True`` so we reconfigure even if an imported dependency already
-    # installed a root handler (otherwise basicConfig is a no-op and the root
-    # logger stays at WARNING, dropping our INFO logs).
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    args = tyro.cli(Args)
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    _apply_cpu_thread_limit(args.max_cpu_threads)
+# --------------------------------------------------------------------------- #
+# Intermediate manifest (GPU stage output -> CPU stage input)
+# --------------------------------------------------------------------------- #
 
-    if args.load_existing:
-        if not args.output.exists():
-            raise FileNotFoundError(
-                f"--load-existing was set but the metrics JSON {args.output} does "
-                "not exist. Run without --load-existing first, or point --output at "
-                "an existing results file."
-            )
-        existing = json.loads(args.output.read_text())
-        threshold = existing.get(
-            "fscore_threshold_meters", args.fscore_threshold_meters
+
+def save_manifest(intermediate_dir: Path, manifest: dict) -> None:
+    """Write the intermediate ``manifest.json`` under ``intermediate_dir``."""
+    intermediate_dir.mkdir(parents=True, exist_ok=True)
+    with (intermediate_dir / MANIFEST_FILENAME).open("w") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def load_manifest(intermediate_dir: Path) -> dict:
+    """Read the intermediate ``manifest.json`` from ``intermediate_dir``."""
+    manifest_path = intermediate_dir / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Intermediate manifest not found: {manifest_path}. Run the GPU stage "
+            "(eval_final_recon_accuracy_gpu.py) first."
         )
-        _LOGGER.info("Loaded existing metrics from %s", args.output)
-
-        render_latex_table(args, existing["resolved_runs"], threshold)
-        return
-
-    columns = build_columns(args)
-    if not columns:
-        raise ValueError("No init methods to evaluate. Provide --init-methods.")
-    column_by_label = {column.label: column for column in columns}
-
-    if len(list(args.scenes)) == 0 and args.dataset is None:
-        raise ValueError("No scenes to evaluate. Provide --scenes or --dataset.")
-    scenes = get_scenes_from_args(
-        list(args.scenes), [args.dataset] if args.dataset is not None else []
-    )
-    if not scenes:
-        raise ValueError("No scenes to evaluate. Provide --scenes or --dataset.")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    resolved_runs: dict[str, list[dict]] = {}
-    for scene in scenes:
-        scene = str(scene)
-        runs = resolve_runs_for_scene(scene, columns, args)
-        for run in runs:
-            level = logging.INFO if run.exists else logging.WARNING
-            _LOGGER.log(
-                level,
-                "[%s] column=%s strategy=%s -> %s%s",
-                scene,
-                run.column_label,
-                run.strategy_id,
-                run.output_dir,
-                "" if run.exists else "  (MISSING)",
-            )
-
-        geometry = load_scene_geometry_inputs(scene)
-        points_world = geometry.laser_points_world
-        colors = geometry.laser_colors
-        cameras = geometry.cameras
-
-        scene_debug_dir = (
-            args.debug_export_dir / _sanitize_for_path(scene)
-            if args.debug_export_dir is not None
-            else None
-        )
-
-        # Reference (laser-scan) point set, processed once per scene. Not needed
-        # for ETH3D scenes, which are scored by the external ETH3D tool instead.
-        if geometry.is_eth3d:
-            reference = None
-        else:
-            reference = process_laser_scan_point_cloud(
-                points_world,
-                colors,
-                cameras,
-                args.voxel_size,
-                debug_export_dir=scene_debug_dir,
-                debug_prefix="laser_scan",
-            )
-
-        scene_entries: list[dict] = []
-
-        # "At Init" row: F-score of each column's initial point cloud / splats
-        # (before training), computed once per column and placed as the first row.
-        for column in columns:
-            init_entry: dict = {
-                "column": column.label,
-                "strategy": AT_INIT_ROW_LABEL,
-                "output_dir": None,
-                "exists": True,
-                "metrics": None,
-            }
-            try:
-                init_reconstruction = build_init_reconstruction(
-                    column,
-                    scene,
-                    args,
-                    geometry,
-                    device,
-                    debug_export_dir=scene_debug_dir,
-                )
-            except FileNotFoundError as exc:
-                init_entry["exists"] = False
-                _LOGGER.warning(
-                    "[%s] No init geometry for column=%s: %s",
-                    scene,
-                    column.label,
-                    exc,
-                )
-            else:
-                init_metrics = compute_reconstruction_metrics(
-                    init_reconstruction, reference, geometry, args
-                )
-                init_entry["metrics"] = init_metrics
-                _LOGGER.info(
-                    "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f (thr=%.3f m)",
-                    scene,
-                    column.label,
-                    AT_INIT_ROW_LABEL,
-                    init_metrics["fscore"],
-                    init_metrics["precision"],
-                    init_metrics["recall"],
-                    args.fscore_threshold_meters,
-                )
-            scene_entries.append(init_entry)
-
-        for run in runs:
-            entry: dict = {
-                "column": run.column_label,
-                "strategy": run.row_id,
-                "output_dir": str(run.output_dir),
-                "exists": run.exists,
-                "metrics": None,
-            }
-            if not run.exists:
-                _LOGGER.warning(
-                    "[%s] Skipping missing run column=%s strategy=%s (path %s)",
-                    scene,
-                    run.column_label,
-                    run.strategy_id,
-                    run.output_dir,
-                )
-                scene_entries.append(entry)
-                continue
-
-            splats = load_trained_splats(run.output_dir, args.temp_dir_override)
-            # Bring the trained splats back from the normalized frame into the
-            # world / laser-scan frame so metrics are computed at metric scale.
-            # For older monodepth / da3 point-cloud runs the normalization
-            # transform may have been derived from the init points instead of
-            # the SfM points; resolve_world_frame_splats verifies and corrects
-            # this.
-            splats_world = resolve_world_frame_splats(
-                splats, column_by_label[run.column_label], scene, args, geometry
-            )
-            prefix = _sanitize_for_path(f"{run.column_label}__{run.strategy_id}")
-            try:
-                reconstruction = process_splats_via_tsdf(
-                    splats_world,
-                    cameras,
-                    args.voxel_size,
-                    args.near_plane,
-                    args.far_plane,
-                    args.tsdf_sdf_trunc_voxel_multiplier,
-                    args.min_render_alpha,
-                    device,
-                    debug_export_dir=scene_debug_dir,
-                    debug_prefix=prefix,
-                    tsdf_backend=args.tsdf_backend,
-                    render_downscale=args.render_downscale,
-                    tsdf_block_count=args.tsdf_block_count,
-                )
-            except RuntimeError as exc:
-                if not _is_empty_tsdf_error(exc):
-                    raise
-                _LOGGER.warning(
-                    "[%s] column=%s strategy=%s: TSDF fusion produced no geometry "
-                    "(%s); leaving cell empty.",
-                    scene,
-                    run.column_label,
-                    run.strategy_id,
-                    exc,
-                )
-                scene_entries.append(entry)
-                continue
-
-            metrics = compute_reconstruction_metrics(
-                reconstruction, reference, geometry, args
-            )
-            entry["metrics"] = metrics
-            _LOGGER.info(
-                "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f (thr=%.3f m)",
-                scene,
-                run.column_label,
-                run.strategy_id,
-                metrics["fscore"],
-                metrics["precision"],
-                metrics["recall"],
-                args.fscore_threshold_meters,
-            )
-            scene_entries.append(entry)
-
-        resolved_runs[scene] = scene_entries
-
-        # Periodically write the JSON so we can inspect partial results if the script is interrupted.
-        output = {
-            "dataset": args.dataset,
-            "scenes": [str(s) for s in scenes],
-            "columns": [c.label for c in columns],
-            "fscore_threshold_meters": args.fscore_threshold_meters,
-            "resolved_runs": resolved_runs,
-        }
-
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w") as f:
-            json.dump(output, f, indent=2)
-
-    _LOGGER.info("Wrote reconstruction accuracy metrics to %s", args.output)
-
-    render_latex_table(args, resolved_runs, args.fscore_threshold_meters)
-
-
-if __name__ == "__main__":
-    main()
+    return json.loads(manifest_path.read_text())
