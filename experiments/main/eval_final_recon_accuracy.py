@@ -1625,7 +1625,16 @@ def compute_eth3d_metrics(
         ]
         _LOGGER.info("Running ETH3D evaluation: %s", " ".join(cmd))
         eval_start = time.perf_counter()
-        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            _LOGGER.error(
+                "ETH3DMultiViewEvaluation failed (exit %s).\nstdout:\n%s\nstderr:\n%s",
+                exc.returncode,
+                (exc.stdout or "").rstrip(),
+                (exc.stderr or "").rstrip(),
+            )
+            raise
         _LOGGER.info(
             "ETH3D evaluation (%d recon points) finished in %.1fs",
             reconstruction.points.shape[0],
