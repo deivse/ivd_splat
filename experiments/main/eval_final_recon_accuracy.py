@@ -899,6 +899,17 @@ def _splat_render_inputs(
     return means, quats, scales, opacities, sh_coeffs, sh_degree
 
 
+# Substring of the Open3D error raised when TSDF fusion produces no geometry
+# (e.g. no rendered depth passes the alpha threshold in any camera), so the
+# VoxelBlockGrid ends up with zero occupied blocks / hashmap keys.
+_EMPTY_TSDF_ERROR_SUBSTR = "Input number of keys should > 0"
+
+
+def _is_empty_tsdf_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is the Open3D error signalling an empty TSDF volume."""
+    return _EMPTY_TSDF_ERROR_SUBSTR in str(exc)
+
+
 def process_splats_via_tsdf(
     splats: SplatData,
     cameras: Cameras,
@@ -1769,8 +1780,10 @@ def write_metrics_latex_table(
     / Recall``), and is colored by the *first* requested metric.
 
     Each metric is aggregated over scenes (mean across scenes); cells with no
-    available run become ``NaN`` and render as ``--``. Percentage metrics are
-    scaled by 100.
+    available run become ``NaN`` and render as ``--``. Cells that cover fewer
+    scenes than the best-covered cell (i.e. a scene failed or is missing) are
+    blanked rather than reporting a mean over a smaller denominator. Percentage
+    metrics are scaled by 100.
     """
     import pandas as pd
     from results_scripts.constants import (
@@ -1819,6 +1832,30 @@ def write_metrics_latex_table(
                     break
         return float(np.mean(values)) if values else float("nan")
 
+    def cell_scene_count(strategy: str, column: str) -> int:
+        """Number of scenes containing every requested metric for this cell."""
+        count = 0
+        for scene in scenes:
+            for entry in resolved_runs[scene]:
+                if entry["strategy"] == strategy and entry["column"] == column:
+                    metrics = entry.get("metrics")
+                    if metrics is not None and all(
+                        metrics.get(metric) is not None for metric in metric_keys
+                    ):
+                        count += 1
+                    break
+        return count
+
+    # A fully-covered cell aggregates over every evaluated scene. Any cell with
+    # fewer scenes (a scene failed / is missing) would silently average over a
+    # smaller denominator, so it is blanked instead of reporting a partial mean.
+    cell_counts = {
+        (strategy, column): cell_scene_count(strategy, column)
+        for strategy in strategies_raw
+        for column in columns_raw
+    }
+    max_scene_count = max(cell_counts.values(), default=0)
+
     row_labels = [_latex_format_row_label(s) for s in strategies_raw]
     col_labels = [_latex_format_col_label(c) for c in columns_raw]
 
@@ -1828,6 +1865,19 @@ def write_metrics_latex_table(
 
     for strategy, row_label in zip(strategies_raw, row_labels):
         for column, col_label in zip(columns_raw, col_labels):
+            count = cell_counts[(strategy, column)]
+            if count < max_scene_count:
+                _LOGGER.warning(
+                    "Blanking table cell [row=%s, col=%s]: only %d/%d scenes "
+                    "have all requested metrics.",
+                    strategy,
+                    column,
+                    count,
+                    max_scene_count,
+                )
+                color_table.loc[row_label, col_label] = np.nan
+                text_table.loc[row_label, col_label] = np.nan
+                continue
             means = {m: mean_metric(strategy, column, m) for m in metric_keys}
             color_table.loc[row_label, col_label] = means[color_metric]
             if np.isnan(means[color_metric]):
@@ -2054,21 +2104,35 @@ def main() -> None:
                 splats, column_by_label[run.column_label], scene, args, geometry
             )
             prefix = _sanitize_for_path(f"{run.column_label}__{run.strategy_id}")
-            reconstruction = process_splats_via_tsdf(
-                splats_world,
-                cameras,
-                args.voxel_size,
-                args.near_plane,
-                args.far_plane,
-                args.tsdf_sdf_trunc_voxel_multiplier,
-                args.min_render_alpha,
-                device,
-                debug_export_dir=scene_debug_dir,
-                debug_prefix=prefix,
-                tsdf_backend=args.tsdf_backend,
-                render_downscale=args.render_downscale,
-                tsdf_block_count=args.tsdf_block_count,
-            )
+            try:
+                reconstruction = process_splats_via_tsdf(
+                    splats_world,
+                    cameras,
+                    args.voxel_size,
+                    args.near_plane,
+                    args.far_plane,
+                    args.tsdf_sdf_trunc_voxel_multiplier,
+                    args.min_render_alpha,
+                    device,
+                    debug_export_dir=scene_debug_dir,
+                    debug_prefix=prefix,
+                    tsdf_backend=args.tsdf_backend,
+                    render_downscale=args.render_downscale,
+                    tsdf_block_count=args.tsdf_block_count,
+                )
+            except RuntimeError as exc:
+                if not _is_empty_tsdf_error(exc):
+                    raise
+                _LOGGER.warning(
+                    "[%s] column=%s strategy=%s: TSDF fusion produced no geometry "
+                    "(%s); leaving cell empty.",
+                    scene,
+                    run.column_label,
+                    run.strategy_id,
+                    exc,
+                )
+                scene_entries.append(entry)
+                continue
 
             metrics = compute_reconstruction_metrics(
                 reconstruction, reference, geometry, args
