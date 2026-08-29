@@ -1068,47 +1068,57 @@ def process_splats_via_tsdf(
         render_seconds += time.perf_counter() - render_start
 
         integrate_start = time.perf_counter()
-        if use_gpu:
-            intrinsic = o3c.Tensor(K, dtype=o3c.float64, device=o3c.Device("CPU:0"))
-            extrinsic = o3c.Tensor(
-                viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
+        try:
+            if use_gpu:
+                intrinsic = o3c.Tensor(K, dtype=o3c.float64, device=o3c.Device("CPU:0"))
+                extrinsic = o3c.Tensor(
+                    viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
+                )
+                frustum_blocks = vbg.compute_unique_block_coordinates(
+                    depth_img,
+                    intrinsic,
+                    extrinsic,
+                    depth_scale=1.0,
+                    depth_max=far_plane,
+                    trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+                )
+                vbg.integrate(
+                    frustum_blocks,
+                    depth_img,
+                    color_img,
+                    intrinsic,
+                    extrinsic,
+                    depth_scale=1.0,
+                    depth_max=far_plane,
+                    trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+                )
+            else:
+                rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                    o3d.geometry.Image(color_np),
+                    o3d.geometry.Image(depth_np),
+                    depth_scale=1.0,
+                    depth_trunc=far_plane,
+                    convert_rgb_to_intensity=False,
+                )
+                intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                    width,
+                    height,
+                    K[0, 0],
+                    K[1, 1],
+                    K[0, 2],
+                    K[1, 2],
+                )
+                volume.integrate(rgbd, intrinsic, viewmat)
+            integrate_seconds += time.perf_counter() - integrate_start
+        except Exception as exc:
+            _LOGGER.error(
+                "TSDF INTEGRATION FAILED (CONTINUING) for camera %d (viewmat %s, K %s): %s",
+                cam_idx,
+                viewmat,
+                K,
+                exc,
             )
-            frustum_blocks = vbg.compute_unique_block_coordinates(
-                depth_img,
-                intrinsic,
-                extrinsic,
-                depth_scale=1.0,
-                depth_max=far_plane,
-                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
-            )
-            vbg.integrate(
-                frustum_blocks,
-                depth_img,
-                color_img,
-                intrinsic,
-                extrinsic,
-                depth_scale=1.0,
-                depth_max=far_plane,
-                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
-            )
-        else:
-            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                o3d.geometry.Image(color_np),
-                o3d.geometry.Image(depth_np),
-                depth_scale=1.0,
-                depth_trunc=far_plane,
-                convert_rgb_to_intensity=False,
-            )
-            intrinsic = o3d.camera.PinholeCameraIntrinsic(
-                width,
-                height,
-                K[0, 0],
-                K[1, 1],
-                K[0, 2],
-                K[1, 2],
-            )
-            volume.integrate(rgbd, intrinsic, viewmat)
-        integrate_seconds += time.perf_counter() - integrate_start
+            continue
 
     extract_start = time.perf_counter()
     if use_gpu:
