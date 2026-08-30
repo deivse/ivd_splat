@@ -64,7 +64,7 @@ for strategy in $ALL_STRATEGIES; do
     # For geom accuracy eval on ETH3D.
     run_practical_init_methods_no_ablations "eth3d" "monodepth edgs da3 laser_scan"
     # Sparsified datasets (no ablations here)
-    run_practical_init_methods_no_ablations "$SPARSIFIED_DATASETS" "monodepth edgs da3 laser_scan"
+    run_practical_init_methods_no_ablations "$SPARSIFIED_DATASETS" "monodepth edgs da3"
 
     # Datasets without laser scan data, so just monodepth and EDGS.
     run_practical_init_methods_with_ablations "$OTHER_DATASETS" "monodepth edgs da3"
