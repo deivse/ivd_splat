@@ -33,3 +33,6 @@ def load_and_sparsify_colmap_dataset(
     else:
         raise ValueError(f"Unknown split: {split}")
     return dataset_index_select(full_dataset, list(indices))
+
+def download_not_implemented(*args, **kwargs):
+    raise NotImplementedError("This dataset does not have a download function implemented.")

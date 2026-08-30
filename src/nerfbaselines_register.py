@@ -25,11 +25,82 @@ register(
     }
 )
 
-register(IVD_SPLAT_METHOD_SPEC)
 
 register(
     {
         "id": "mlflow",
         "logger_class": "mlflow_nerfbaselines_logger.logger:MLflowLogger",
+    }
+)
+
+register(IVD_SPLAT_METHOD_SPEC)
+
+
+def download_not_implemented(*args, **kwargs):
+    raise NotImplementedError(
+        "This dataset does not have a download function implemented."
+    )
+
+
+register(
+    {
+        "id": "mipnerf360-sparsified",
+        "download_dataset_function": "customized_dataset_loaders.sparsifying_colmap_loader:download_not_implemented",
+        "evaluation_protocol": "nerf",
+        "metadata": {
+            "id": "mipnerf360-sparsified",
+            "name": "Mip-NeRF 360 Sparsified",
+            "scenes": [
+                {"id": scene, "name": scene.title()}
+                for scene in [
+                    "bicycle",
+                    "bonsai",
+                    "counter",
+                    "garden",
+                    "kitchen",
+                    "room",
+                    "stump",
+                    "treehill",
+                    "flowers",
+                ]
+            ],
+        },
+    }
+)
+
+register(
+    {
+        "id": "tanksandtemples-sparsified",
+        "download_dataset_function": "customized_dataset_loaders.sparsifying_colmap_loader:download_not_implemented",
+        "evaluation_protocol": "nerf",
+        "metadata": {
+            "id": "tanksandtemples-sparsified",
+            "name": "Tanks and Temples Sparsified",
+            "scenes": [
+                {"id": scene, "name": scene.title()}
+                for scene in [
+                    "auditoriumballroom",
+                    "courtroom",
+                    "museum",
+                    "m60",
+                    "panther",
+                    "church",
+                    "meetingroom",
+                    "playground",
+                    "palace",
+                    "temple",
+                    "family",
+                    "francis",
+                    "horse",
+                    "lighthouse",
+                    "train",
+                    "barn",
+                    "caterpillar",
+                    "courthouse",
+                    "ignatius",
+                    "truck",
+                ]
+            ],
+        },
     }
 )
