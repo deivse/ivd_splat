@@ -59,7 +59,10 @@ def get_dataset_scenes(dataset_id: str, exclude_list) -> list[str] | list[Path]:
 
     if dataset_id.endswith("-sparsified"):
         base_dataset_id = dataset_id[: -len("-sparsified")]
-        return get_dataset_scenes(base_dataset_id, exclude_list)
+        return [
+            scene.replace(base_dataset_id, dataset_id)
+            for scene in get_dataset_scenes(base_dataset_id, exclude_list)
+        ]
 
     dataset_scenes_env_var = f"{dataset_id.upper()}_SCENES"
     if os.environ.get(dataset_scenes_env_var, None) is not None:
@@ -126,11 +129,11 @@ def scene_id_to_nerfbaselines_data_value(scene: str | Path) -> str:
         return str(Path(os.environ["ETH3D_PATH"], scene_id))
     elif dataset_id.endswith("-sparsified"):
         nerfbaselines_datasets_cache_path = str(Path(NB_PREFIX) / "datasets")
-        base_path_str = os.environ.get("SPARSIFIED_DATASETS_PATH", nerfbaselines_datasets_cache_path)
+        base_path_str = os.environ.get(
+            "SPARSIFIED_DATASETS_PATH", nerfbaselines_datasets_cache_path
+        )
         if base_path_str is None:
-            raise RuntimeError(
-                "SPARSIFIED_DATASETS_PATH environment variable not set."
-            )
+            raise RuntimeError("SPARSIFIED_DATASETS_PATH environment variable not set.")
         path = Path(base_path_str, dataset_id, scene_id)
         if not path.is_dir():
             raise RuntimeError(f"Sparsified dataset path does not exist: {path}")
