@@ -7,6 +7,9 @@ SCANNETPP_SCENE_SELECTION = (
     "3f15a9266d,5eb31827b7,3db0a1c8f3,40aec5fffa,9071e139d9,"
     "e7af285f7d,bde1e479ad,5748ce6f01,825d228aec,7831862f02"
 ).split(",")
+# TODO: TMP ONLY THOSE THAT ARE ALSO IN DA3 TEST SET
+# SCANNETPP_SCENE_SELECTION = ['c5439f4607', 'bcd2436daf', 'f3d64c30f8', '40aec5fffa', '9071e139d9', 'bde1e479ad', '7831862f02']
+
 TANKSANDTEMPLES_SCENE_SELECTION = (
     "auditorium,ballroom,palace,temple,family,horse,lighthouse,m60,train,"
     "barn,caterpillar,church,meetingroom,truck"
