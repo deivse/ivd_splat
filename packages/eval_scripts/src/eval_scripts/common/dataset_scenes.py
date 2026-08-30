@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Literal
 from nerfbaselines._registry import get_dataset_spec
+from nerfbaselines._constants import NB_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +57,10 @@ def get_dataset_scenes(dataset_id: str, exclude_list) -> list[str] | list[Path]:
             if d.is_dir()
         ]
 
+    if dataset_id.endswith("-sparsified"):
+        base_dataset_id = dataset_id[: -len("-sparsified")]
+        return get_dataset_scenes(base_dataset_id, exclude_list)
+
     dataset_scenes_env_var = f"{dataset_id.upper()}_SCENES"
     if os.environ.get(dataset_scenes_env_var, None) is not None:
         return [
@@ -90,7 +95,9 @@ SCENES_PER_DATASET = {
     dataset: get_dataset_scenes(dataset, [])
     for dataset in [
         "mipnerf360",
+        "mipnerf360-sparsified",
         "tanksandtemples",
+        "tanksandtemples-sparsified",
         "scannet++",
         "eval_on_train_set_scannet++",
         "eth3d",
@@ -117,6 +124,17 @@ def scene_id_to_nerfbaselines_data_value(scene: str | Path) -> str:
         if scene not in SCENES_PER_DATASET[dataset_id]:
             raise RuntimeError(f"Unknown eth3d scene_id: {scene_id}")
         return str(Path(os.environ["ETH3D_PATH"], scene_id))
+    elif dataset_id.endswith("-sparsified"):
+        nerfbaselines_datasets_cache_path = str(Path(NB_PREFIX) / "datasets")
+        base_path_str = os.environ.get("SPARSIFIED_DATASETS_PATH", nerfbaselines_datasets_cache_path)
+        if base_path_str is None:
+            raise RuntimeError(
+                "SPARSIFIED_DATASETS_PATH environment variable not set."
+            )
+        path = Path(base_path_str, dataset_id, scene_id)
+        if not path.is_dir():
+            raise RuntimeError(f"Sparsified dataset path does not exist: {path}")
+        return str(path)
     else:
         try:
             get_dataset_scenes(dataset_id, [])[0]
@@ -151,6 +169,11 @@ def is_scene_indoors_or_outdoors(scene_id: str) -> Literal["indoors", "outdoors"
     outside: Literal["outdoors"] = "outdoors"
 
     dataset, scene = scene_id.split("/")
+
+    if dataset.endswith("-sparsified"):
+        base_dataset = dataset[: -len("-sparsified")]
+        return is_scene_indoors_or_outdoors(f"{base_dataset}/{scene}")
+
     if dataset == "mipnerf360":
         mipnerf360_types: dict[str, Literal["indoors", "outdoors"]] = {
             "garden": outside,
