@@ -72,7 +72,7 @@ register(
     {
         "id": "tanksandtemples-sparsified",
         "download_dataset_function": "customized_dataset_loaders.sparsifying_colmap_loader:download_not_implemented",
-        "evaluation_protocol": "nerf",
+        "evaluation_protocol": "default",
         "metadata": {
             "id": "tanksandtemples-sparsified",
             "name": "Tanks and Temples Sparsified",
