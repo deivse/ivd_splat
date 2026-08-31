@@ -78,6 +78,10 @@ class Args:
         default_factory=lambda: ["fscore", "precision", "recall"]
     )
 
+    # Optional list of scenes to include in the output table. If not set, all scenes in the
+    # GPU-stage manifest are included. Scenes should be specified without dataset, e.g. 'pipes', not 'eth3d/pipes'.
+    table_scenes: list[str] | None = None
+
 
 def main() -> None:
     # ``force=True`` so we reconfigure even if an imported dependency already
@@ -112,6 +116,7 @@ def main() -> None:
             args.latex_metrics,
             existing["resolved_runs"],
             threshold,
+            scene_list=args.table_scenes,
         )
         return
 
@@ -219,6 +224,7 @@ def main() -> None:
         args.latex_metrics,
         resolved_runs,
         args.fscore_threshold_meters,
+        scene_list=args.table_scenes,
     )
 
 

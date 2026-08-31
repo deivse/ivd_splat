@@ -1742,6 +1742,7 @@ def write_metrics_latex_table(
     out_path: Path,
     caption: str,
     label: str,
+    scene_list: list[str] | None = None,
 ) -> None:
     """
     Render the computed metrics as a single colored LaTeX table: one row per
@@ -1771,6 +1772,19 @@ def write_metrics_latex_table(
         raise ValueError("At least one metric is required for the LaTeX table.")
 
     scenes = sorted(resolved_runs.keys())
+
+    def scene_name_from_full_id(scene: str) -> str:
+        _, name = scene.split("/", 1)
+        return name
+
+    if scene_list is not None:
+        scenes = [s for s in scenes if scene_name_from_full_id(s) in scene_list]
+        missing = set(scene_list) - {scene_name_from_full_id(s) for s in scenes}
+        if missing:
+            _LOGGER.warning(
+                "Some requested scenes are missing from the resolved runs: %s",
+                ", ".join(sorted(missing)),
+            )
 
     # Discover the (strategy row, init-method column) grid in first-seen order.
     strategies_raw: list[str] = []
@@ -1900,6 +1914,7 @@ def render_latex_table(
     latex_metrics: list[str],
     resolved_runs: dict[str, list[dict]],
     threshold_meters: float,
+    scene_list: list[str] | None = None,
 ) -> None:
     """
     Write the metrics LaTeX table to ``latex_output`` (defaulting to the JSON
@@ -1912,6 +1927,7 @@ def render_latex_table(
         latex_path,
         caption=f"Reconstruction accuracy (inlier threshold {threshold_meters:g}\\,m)",
         label="final_recon_fscore",
+        scene_list=scene_list,
     )
 
 
