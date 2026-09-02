@@ -1,6 +1,7 @@
 import logging
 import re
 from typing import Literal
+import typing
 
 import matplotlib as mpl
 import numpy as np
@@ -267,7 +268,7 @@ def tabular_colored_from_numeric_with_custom_text(
     for r in text_table.index:
         for c in text_table.columns:
             styled_table = styled_table.format(
-                {c: (lambda s=text_table.loc[r, c]: (lambda _v: s))()},
+                {c: (lambda s=text_table.loc[r, c]: lambda _v: s)()},
                 subset=pd.IndexSlice[[r], [c]],
                 na_rep="--" if hide_nulls else None,
             )
@@ -331,6 +332,8 @@ def make_latex_table_for_metrics(
     horizontal_cols_label: str = "",
     cmap: "mpl.colors.Colormap" = VALUE_CMAP,
     delta: bool = False,
+    center_zero: bool = False,
+    significant_cells: set[tuple[str, str, str]] | None = None,
 ) -> str:
     """
     data: strategy -> column -> per-scene dataframe for all metrics with lists of values per eval iter in cells.
@@ -347,6 +350,14 @@ def make_latex_table_for_metrics(
     reference: it shows absolute values and lands on the color map's neutral
     center, while every other row shows the signed difference from the reference
     within the same column, colored on a symmetric scale per metric group.
+
+    When ``center_zero`` is set (and ``delta`` is not), the cell values are
+    colored on a symmetric scale about zero per metric group, so zero maps to the
+    color map's neutral center (use a diverging ``cmap``). Useful when the cells
+    already hold signed quantities such as improvements/deltas.
+
+    ``significant_cells`` optionally identifies ``(metric, row, column)`` cells
+    whose formatted value receives a zero-width superscript asterisk.
     """
     metrics = metrics or [
         "eval-all-test/psnr",
@@ -418,7 +429,13 @@ def make_latex_table_for_metrics(
             per_metric_tables[metric] = (color_table, text_table)
         else:
             for (row_label, col_label), cell in cells.items():
-                text_table.loc[row_label, col_label] = format_cell(cell)
+                text = format_cell(cell)
+                if (
+                    significant_cells
+                    and (metric, row_label, col_label) in significant_cells
+                ):
+                    text += r"\rlap{\textsuperscript{*}}"
+                text_table.loc[row_label, col_label] = text
             per_metric_tables[metric] = (means, text_table)
 
     if format_args.metrics_layout == MetricsLayout.vertical:
@@ -434,9 +451,9 @@ def make_latex_table_for_metrics(
                 -table if metric in LOWER_IS_BETTER_METRICS else table,
                 text_table,
                 column_format=column_format,
-                # In delta mode color symmetrically so the reference row (delta 0)
-                # is neutral, and rule it off from the delta rows.
-                range_mode="centered" if delta else "default",
+                # In delta mode (or when centering at zero) color symmetrically so
+                # zero is neutral; in delta mode also rule off the reference row.
+                range_mode="centered" if (delta or center_zero) else "default",
                 hrule_after_first_row=delta,
                 color_intensity=format_args.color_intensity,
                 force_black_text=format_args.force_black_text,
@@ -501,9 +518,10 @@ def make_latex_table_for_metrics(
             table, text_table = per_metric_tables[metric]
             numeric = table.apply(pd.to_numeric, errors="coerce")
             invert = metric in LOWER_IS_BETTER_METRICS
-            if delta:
-                # ``table`` holds per-column deltas vs the reference row; color
-                # them on a symmetric scale so the reference (delta 0) is neutral.
+            if delta or center_zero:
+                # ``table`` holds signed quantities (per-column deltas vs the
+                # reference row, or already-signed values); color them on a
+                # symmetric scale so zero is neutral.
                 max_abs = numeric.abs().max().max()
                 direction = -1.0 if invert else 1.0
             else:
@@ -514,7 +532,7 @@ def make_latex_table_for_metrics(
             for col_label in column_labels:
                 cid = f"{metric}::{col_label}"
                 ordered_ids.append(cid)
-                if delta:
+                if delta or center_zero:
                     if pd.notna(max_abs) and max_abs:
                         normalized = (
                             0.5 + 0.5 * (direction * numeric[col_label] / max_abs)

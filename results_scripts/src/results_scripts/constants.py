@@ -8,7 +8,15 @@ SCANNETPP_SCENE_SELECTION = (
     "e7af285f7d,bde1e479ad,5748ce6f01,825d228aec,7831862f02"
 ).split(",")
 # TODO: TMP ONLY THOSE THAT ARE ALSO IN DA3 TEST SET
-# SCANNETPP_SCENE_SELECTION = ['c5439f4607', 'bcd2436daf', 'f3d64c30f8', '40aec5fffa', '9071e139d9', 'bde1e479ad', '7831862f02']
+SCANNETPP_DA3_TEST_SCENE_SELECTION = [
+    "c5439f4607",
+    "bcd2436daf",
+    "f3d64c30f8",
+    "40aec5fffa",
+    "9071e139d9",
+    "bde1e479ad",
+    "7831862f02",
+]
 
 TANKSANDTEMPLES_SCENE_SELECTION = (
     "auditorium,ballroom,palace,temple,family,horse,lighthouse,m60,train,"
@@ -108,8 +116,13 @@ LASER_DATASETS_WITHOUT_ETH3D = [
     dataset for dataset in LASER_DATASETS if dataset != "eth3d"
 ]
 OTHER_DATASETS = ["mipnerf360", "tanksandtemples"]
-ALL_DATASETS = LASER_DATASETS + OTHER_DATASETS
-ALL_DATASETS_WITHOUT_ETH3D = [dataset for dataset in ALL_DATASETS if dataset != "eth3d"]
+SPARSIFIED_DATASETS = ["mipnerf360-sparsified", "tanksandtemples-sparsified"]
+BASE_DATASETS = LASER_DATASETS + OTHER_DATASETS
+ALL_DATASETS = BASE_DATASETS + SPARSIFIED_DATASETS
+BASE_DATASETS_WITHOUT_ETH3D = [
+    dataset for dataset in BASE_DATASETS if dataset != "eth3d"
+]
+ALL_DATASETS_WITHOUT_ETH3D = BASE_DATASETS_WITHOUT_ETH3D + SPARSIFIED_DATASETS
 
 DATASET_NAMES = {
     "scannet++": "ScanNet++",
@@ -125,6 +138,7 @@ DEFAULT_TABLE_METRICS = [
     "train/num-gaussians",
     "train/total-train-time",
 ]
+PHOTOMETRIC_METRICS = [f"eval-all-test/{metric}" for metric in ["psnr", "ssim", "lpips"]]
 
 # Metrics for which a lower value is better. Drives both the arrow shown in
 # pretty metric names and the direction of table coloring (so "better" is always

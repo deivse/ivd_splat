@@ -26,9 +26,14 @@ from results_scripts.data_access import (
     drop_uncommon_scenes,
 )
 from results_scripts.param_conversions import PARAM_CONVERSIONS
+from results_scripts.plots import per_scene_metric_dotplots
 from results_scripts.statistics import (
     cell_data_across_strategies,
+    per_scene_metric_difference,
     series_mean_frame_mean,
+)
+from results_scripts.statistics import (
+    friedman_holm_improvements_over_control,
 )
 from results_scripts.tables import (
     tabular_colored_from_numeric_with_custom_text,
@@ -40,20 +45,22 @@ from results_scripts.constants import (
     ALL_DATASETS_WITHOUT_ETH3D,
     ALL_STRATEGIES,
     ALL_STRATEGIES_EXCEPT_NO_D,
+    BASE_DATASETS_WITHOUT_ETH3D,
     DATASET_NAMES,
     DENSE_INIT_METRICS,
     LASER_DATASETS,
     LASER_DATASETS_WITHOUT_ETH3D,
-    LINE_CHART_PLOT_STARTS,
     LOWER_IS_BETTER_METRICS,
     METRIC_NAME_MAP,
     METRIC_PRETTY_NAMES,
+    PHOTOMETRIC_METRICS,
+    SCANNETPP_DA3_TEST_SCENE_SELECTION,
+    SCANNETPP_SCENE_SELECTION,
     STRATEGY_NAMES,
     TABLE_ROUNDING_PER_METRIC,
     TRACKING_URI,
 )
 from results_scripts.formatting import (
-    CellData,
     FormatOptions,
     MetricsLayout,
     TableCellType,
@@ -72,6 +79,7 @@ from results_scripts.utils import (
     gmax_fraction_label,
     load_json,
     name_to_path,
+    print_friedman_summary,
     save_figure_svg,
     write_file,
 )
@@ -249,6 +257,77 @@ def build_means_with_sfm_baseline(
     return data_means
 
 
+def significant_improvement_cells(
+    data_per_dataset: dict[str, dict[str, dict[str, pd.DataFrame]]],
+    *,
+    sfm_column: str,
+    metrics: list[str] = PHOTOMETRIC_METRICS,
+    alpha: float = 0.05,
+) -> dict[str, set[tuple[str, str, str]]]:
+    """Mark statistically significant improvements over SfM (Demšar, 2006).
+
+    For each (dataset, strategy, metric) the initializations are compared over the
+    scenes with a Friedman test using the Iman--Davenport correction. When its
+    omnibus null hypothesis is rejected, Holm's step-down procedure with SfM as the
+    control flags the initializations that significantly *improve* over SfM. Each
+    scene contributes a single value per initialization (the mean over eval
+    iterations / seeds). Returns per-dataset ``(metric, strategy, init-column)``
+    cells to mark.
+    """
+
+    def per_scene_scalars(series: pd.Series) -> pd.Series:
+        return series.map(
+            lambda values: float(np.mean(values)) if np.size(values) else np.nan
+        )
+
+    marked: dict[str, set[tuple[str, str, str]]] = {}
+    friedman_records: list[tuple[str, str, str, float | None]] = []
+    for dataset, data in data_per_dataset.items():
+        total_num_cells_except_sfm = 0
+        num_significant_cells = 0
+        for strategy, columns in data.items():
+            if sfm_column not in columns:
+                continue
+
+            total_num_cells_except_sfm += (len(columns) - 1) * len(metrics)
+
+            for metric in metrics:
+                per_method = {
+                    column: per_scene_scalars(df[metric])
+                    for column, df in columns.items()
+                    if metric in df
+                }
+                if sfm_column not in per_method or len(per_method) < 2:
+                    assert False
+
+                friedman, significant = friedman_holm_improvements_over_control(
+                    per_method,
+                    control=sfm_column,
+                    lower_is_better=metric in LOWER_IS_BETTER_METRICS,
+                    alpha=alpha,
+                )
+
+                friedman_records.append(
+                    (
+                        DATASET_NAMES.get(dataset, dataset),
+                        strategy,
+                        METRIC_NAME_MAP.get(metric, metric),
+                        friedman.p_value if friedman is not None else None,
+                    )
+                )
+                for column in significant:
+                    marked.setdefault(dataset, set()).add((metric, strategy, column))
+
+                num_significant_cells += len(significant)
+        print(
+            f"Dataset: {dataset}, Total cells: {total_num_cells_except_sfm}, Significant cells: {num_significant_cells} ({num_significant_cells / total_num_cells_except_sfm * 100:.1f}%)"
+        )
+
+    print_friedman_summary(friedman_records, alpha=alpha)
+
+    return marked
+
+
 def save_bar_chart_legend(
     ctx: ResultsContext,
     section_subdir: str,
@@ -336,7 +415,7 @@ def laser_scan_tables(
     if cfg.include_sparse:
         print("Including sparse points in Laser Scan tables (except eth3d)!")
 
-    tables: dict[str, str] = {}
+    data_per_dataset: dict[str, dict[str, dict[str, pd.DataFrame]]] = {}
     for dataset in LASER_DATASETS:
         runs = ctx.runs_per_dataset[dataset].copy()
 
@@ -378,6 +457,14 @@ def laser_scan_tables(
 
         drop_uncommon_scenes(data, debug_out=True)
 
+        data_per_dataset[dataset] = data
+
+    significant_cells = significant_improvement_cells(
+        data_per_dataset, sfm_column=COL_SFM
+    )
+
+    tables: dict[str, str] = {}
+    for dataset, data in data_per_dataset.items():
         tables[dataset] = make_latex_table_for_metrics(
             data=data,
             latex_caption=DATASET_NAMES[dataset],
@@ -385,6 +472,7 @@ def laser_scan_tables(
             column_order=COL_ORDER,
             row_order=[STRATEGY_NAMES[strategy] for strategy in ALL_STRATEGIES],
             format_args=format_options,
+            significant_cells=significant_cells.get(dataset),
         )
 
     path = ctx.output_helper.get_table_path("laser_scan")
@@ -394,12 +482,125 @@ def laser_scan_tables(
             tables,
             format_options,
             combined_caption=(
-                "Laser scan initialization performance strategies and initialization sizes."
+                "Laser scan initialization performance strategies and initialization sizes. "
+                r"$^{*}$ indicates a statistically significant improvement over SfM "
+                "(Friedman test with Holm's step-down procedure)."
             ),
             combined_label="laser_scan_main",
         ),
     )
     print(f"Saved main Laser Scan table to {path}")
+
+
+@dataclass
+class LaserScanAnalysisPlotsArgs:
+    datasets: list[str] = field(default_factory=lambda: list(LASER_DATASETS))
+    strategies: list[str] = field(default_factory=lambda: list(ALL_STRATEGIES))
+    metrics: list[str] = field(default_factory=lambda: list(PHOTOMETRIC_METRICS))
+    size_fractions: list[str] = field(default_factory=lambda: ["0.5", "0.75", "1.0"])
+    include_sparse: bool = True
+
+    show_scene_labels: bool = True
+    show_strategy_title: bool = True
+
+
+@section_config(LaserScanAnalysisPlotsArgs)
+def laser_scan_analysis_plots(
+    ctx: ResultsContext,
+    format_options: FormatOptions,
+    cfg: LaserScanAnalysisPlotsArgs,
+) -> None:
+    """Plot laser-scan initialization sizes for each densification strategy."""
+    del format_options
+
+    common_args = {
+        "is_default_strategy_config": True,
+        "is_default_init_config": True,
+        "init.position_noise_std": "0.0",
+        "gaussian_cap_fraction": "1.0",
+    }
+    labels = {
+        "sfm": "SfM",
+        "as_sfm": "Laser (SfM size)",
+        **{
+            fraction: f"Laser ({float(fraction):g} Gm)"
+            for fraction in cfg.size_fractions
+        },
+    }
+    data: dict[str, dict[str, list[pd.DataFrame]]] = {
+        strategy: {config: [] for config in labels} for strategy in cfg.strategies
+    }
+
+    for dataset in cfg.datasets:
+        runs = ctx.runs_per_dataset[dataset].copy()
+        for strategy in cfg.strategies:
+            dataset_frames: list[pd.DataFrame] = []
+            if strategy != "DefaultWithoutADCStrategy":
+                sfm_frame = runs.get_per_scene_metrics_for_params(
+                    {"init_group": "sfm_baseline", "strategy": strategy},
+                    metrics=cfg.metrics,
+                )
+                as_sfm_frame = runs.get_per_scene_metrics_for_params(
+                    {
+                        **common_args,
+                        "strategy": strategy,
+                        "init_method": "laser_scan",
+                        "init_size_matches_sfm": True,
+                    },
+                    metrics=cfg.metrics,
+                )
+                if not sfm_frame.empty:
+                    data[strategy]["sfm"].append(sfm_frame)
+                    dataset_frames.append(sfm_frame)
+                if not as_sfm_frame.empty:
+                    data[strategy]["as_sfm"].append(as_sfm_frame)
+                    dataset_frames.append(as_sfm_frame)
+
+            for fraction in cfg.size_fractions:
+                frame = runs.get_per_scene_metrics_for_params(
+                    {
+                        **common_args,
+                        "strategy": strategy,
+                        "init_method": "laser_scan",
+                        "init_size_matches_gmax": True,
+                        "dense_init.target_points_fraction": fraction,
+                        "dense_init.include_sparse": (
+                            cfg.include_sparse and dataset != "eth3d"
+                        ),
+                    },
+                    metrics=cfg.metrics,
+                )
+                if frame.empty:
+                    continue
+                data[strategy][fraction].append(frame)
+                dataset_frames.append(frame)
+
+            if dataset_frames:
+                drop_scenes_not_present_in_all(*dataset_frames, debug_out=False)
+
+    for strategy in cfg.strategies:
+        frames_per_config = {
+            config: pd.concat(frames)
+            for config, frames in data[strategy].items()
+            if frames
+        }
+        if not frames_per_config:
+            logging.warning("No laser-scan plotting data found for %s", strategy)
+            continue
+        fig, _ = per_scene_metric_dotplots(
+            data=frames_per_config,
+            labels={config: labels[config] for config in frames_per_config},
+            metrics=cfg.metrics,
+            title=(
+                STRATEGY_NAMES.get(strategy, strategy)
+                if cfg.show_strategy_title
+                else None
+            ),
+            show_scene_labels=cfg.show_scene_labels,
+        )
+        output_path = ctx.output_helper.get_graph_path("laser_scan_analysis", strategy)
+        save_figure_svg(fig, output_path)
+        plt.close(fig)
 
 
 InitMethodId = Literal[
@@ -413,7 +614,7 @@ class ImprovementTablesArgs:
         default_factory=lambda: ["laser_scan", "monodepth"]
     )
     datasets: list[str] = field(
-        default_factory=lambda: list(ALL_DATASETS_WITHOUT_ETH3D)
+        default_factory=lambda: list(BASE_DATASETS_WITHOUT_ETH3D)
     )
     # If set, append a summary column group aggregating the improvement across all
     # included init methods (per dataset, over the methods applicable to it). The
@@ -450,7 +651,9 @@ def improvement_tables(
     ]
     strat_names = [STRATEGY_NAMES[strategy] for strategy in ALL_STRATEGIES_EXCEPT_NO_D]
 
-    laser_label = "$\\text{{Laser}}^+$" if cfg.include_sparse_laser else "$\\text{{Laser}}$"
+    laser_label = (
+        "$\\text{{Laser}}^+$" if cfg.include_sparse_laser else "$\\text{{Laser}}$"
+    )
     # Per init-method: column label, query params (merged with common_args and the
     # strategy), which metrics to load, and whether it only has data for GT datasets.
     # ``gt_only`` methods (e.g. laser scan) are silently skipped for non-GT datasets.
@@ -911,7 +1114,7 @@ class PracticalTablesArgs:
     strategy_args: dict[str, dict[str, str]] = field(
         default_factory=lambda: {name: dict() for name in STRATEGY_NAMES.keys()}
     )
-    datasets: list[str] = field(default_factory=lambda: ALL_DATASETS_WITHOUT_ETH3D)
+    datasets: list[str] = field(default_factory=lambda: BASE_DATASETS_WITHOUT_ETH3D)
     include_sparse_for_all: Literal["yes", "no", "both"] = "no"
     include_half_init_size_for_all: Literal["yes", "no", "both"] = "no"
     include_sparse_for_laser: bool = True
@@ -1100,7 +1303,7 @@ def practical_tables(
             )
         return specs
 
-    tables = {}
+    data_per_dataset: dict[str, dict[str, dict[str, pd.DataFrame]]] = {}
     for dataset in cfg.datasets:
         print("Dataset:", dataset)
         runs = ctx.runs_per_dataset[dataset].copy()
@@ -1153,30 +1356,40 @@ def practical_tables(
 
         concat_columns_into(all_datasets_data, data)
 
-        col_order = ALL_COLS.copy()
-        if cfg.include_sparse_for_all == "both":
-            # Add the sparse-only versions of the applicable methods after their
-            # main columns.
-            for col in [COL_MONODEPTH, COL_DA3, COL_DA3_NO_FLOATER_REMOVAL, COL_LASER]:
-                if col in col_order:
-                    sparse_col = f"$\\text{{{col}}}^{{{MARK_SPARSE}}}$"
-                    col_order.insert(col_order.index(col) + 1, sparse_col)
-        if cfg.include_half_init_size_for_all == "both":
-            # Add the half-size versions of the applicable methods after their main
-            # columns.
-            for col in [
-                COL_EDGS,
-                COL_EDGS_FULL_SH_INIT,
-                COL_MONODEPTH,
-                COL_DA3,
-                COL_DA3_NO_FLOATER_REMOVAL,
-                COL_DA3_GS_INIT,
-                COL_LASER,
-            ]:
-                if col in col_order:
-                    half_col = f"$\\text{{{col}}}^{{{MARK_HALF}}}$"
-                    col_order.insert(col_order.index(col), half_col)
+        data_per_dataset[dataset] = data
 
+    significant_cells = (
+        significant_improvement_cells(data_per_dataset, sfm_column=COL_SFM)
+        if "sfm" in cfg.init_methods
+        else {}
+    )
+
+    col_order = ALL_COLS.copy()
+    if cfg.include_sparse_for_all == "both":
+        # Add the sparse-only versions of the applicable methods after their main
+        # columns.
+        for col in [COL_MONODEPTH, COL_DA3, COL_DA3_NO_FLOATER_REMOVAL, COL_LASER]:
+            if col in col_order:
+                sparse_col = f"$\\text{{{col}}}^{{{MARK_SPARSE}}}$"
+                col_order.insert(col_order.index(col) + 1, sparse_col)
+    if cfg.include_half_init_size_for_all == "both":
+        # Add the half-size versions of the applicable methods after their main
+        # columns.
+        for col in [
+            COL_EDGS,
+            COL_EDGS_FULL_SH_INIT,
+            COL_MONODEPTH,
+            COL_DA3,
+            COL_DA3_NO_FLOATER_REMOVAL,
+            COL_DA3_GS_INIT,
+            COL_LASER,
+        ]:
+            if col in col_order:
+                half_col = f"$\\text{{{col}}}^{{{MARK_HALF}}}$"
+                col_order.insert(col_order.index(col), half_col)
+
+    tables = {}
+    for dataset, data in data_per_dataset.items():
         tables[dataset] = make_latex_table_for_metrics(
             data=data,
             latex_caption=DATASET_NAMES[dataset],
@@ -1184,6 +1397,7 @@ def practical_tables(
             column_order=col_order,
             row_order=[STRATEGY_NAMES[strategy] for strategy in cfg.strategies],
             format_args=format_options,
+            significant_cells=significant_cells.get(dataset),
         )
     label_suffix = ""
 
@@ -1200,6 +1414,11 @@ def practical_tables(
     if cfg.include_half_init_size_for_all == "both":
         caption += f" (``{MARK_HALF}'' indicates half the number of initial points.)"
         label_suffix += "_half_init=both"
+    if "sfm" in cfg.init_methods:
+        caption += (
+            r" ($^{*}$ indicates a statistically significant improvement over SfM "
+            "using the Friedman test with Holm's step-down procedure.)"
+        )
     path = ctx.output_helper.get_table_path("practical_main" + label_suffix)
     write_file(
         path,
@@ -1233,6 +1452,166 @@ def practical_tables(
     path = ctx.output_helper.get_table_path("practical_train_times")
     write_file(path, init_times_table)
     print(f"Saved Training Times table to {path}")
+
+
+@dataclass
+class PracticalAnalysisPlotsArgs:
+    init_methods: list[InitMethodId] = field(
+        default_factory=lambda: [
+            "sfm",
+            "edgs",
+            "monodepth",
+            "da3",
+            "da3_gs",
+            "laser_scan",
+        ]
+    )
+    strategies: list[str] = field(default_factory=lambda: ALL_STRATEGIES)
+    strategy_args: dict[str, dict[str, str]] = field(
+        default_factory=lambda: {name: dict() for name in STRATEGY_NAMES.keys()}
+    )
+    datasets: list[str] = field(default_factory=lambda: BASE_DATASETS_WITHOUT_ETH3D)
+    metrics: list[str] = field(default_factory=lambda: list(PHOTOMETRIC_METRICS))
+    include_sparse_for_laser: bool = True
+    show_scene_labels: bool = True
+    show_strategy_title: bool = True
+
+
+@section_config(PracticalAnalysisPlotsArgs)
+def practical_analysis_plots(
+    ctx: ResultsContext,
+    format_options: FormatOptions,
+    cfg: PracticalAnalysisPlotsArgs,
+) -> None:
+    """Plot every eval iteration for practical initializations, grouped by scene."""
+    del format_options
+
+    method_specs: dict[InitMethodId, tuple[str, dict[str, Any], bool]] = {
+        "sfm": ("SfM", {"init_group": "sfm_baseline"}, False),
+        "edgs": (
+            "EDGS*",
+            {
+                "init_method": "edgs",
+                "init_method_config": "default",
+                "splat_init.increase_scale_with_fewer_splats": True,
+            },
+            False,
+        ),
+        "edgs_sh": (
+            "EDGS",
+            {
+                "init_method": "edgs",
+                "init_method_config": "full_sh_init=True",
+                "splat_init.increase_scale_with_fewer_splats": True,
+            },
+            False,
+        ),
+        "monodepth": ("Monodepth", {"init_method": "monodepth"}, False),
+        "da3_no_fr": (
+            "DA3 (No F.R.)",
+            {"init_method": "da3", "init_method_config": "default"},
+            False,
+        ),
+        "da3": (
+            "DA3",
+            {"init_method": "da3", "init_method_config": "floater_removal=True"},
+            False,
+        ),
+        "da3_gs": (
+            "DA3 (G.S.)",
+            {
+                "init_method": "da3",
+                "init_method_config": "output_gaussians=True_max_num_images=150",
+            },
+            False,
+        ),
+        "laser_scan": (
+            "Laser",
+            {
+                "init_method": "laser_scan",
+                "init_size_matches_real_init": True,
+                "dense_init.include_sparse": cfg.include_sparse_for_laser,
+            },
+            True,
+        ),
+    }
+    common_args = {
+        "is_default_init_config": True,
+        "gaussian_cap_fraction": "1.0",
+        "init.position_noise_std": "0.0",
+        "dense_init.target_points_fraction": "1.0",
+        "dense_init.include_sparse": False,
+    }
+
+    def strategy_overrides(strategy: str) -> dict[str, Any]:
+        args = cfg.strategy_args.get(strategy, {})
+        if not args:
+            return {"is_default_strategy_config": True}
+        return {
+            key: PARAM_CONVERSIONS.get(key, lambda value: value)(value)
+            for key, value in args.items()
+        }
+
+    data: dict[str, dict[str, list[pd.DataFrame]]] = {
+        strategy: {method: [] for method in cfg.init_methods}
+        for strategy in cfg.strategies
+    }
+    for dataset in cfg.datasets:
+        runs = ctx.runs_per_dataset[dataset].copy()
+        for strategy in cfg.strategies:
+            dataset_frames: list[pd.DataFrame] = []
+            for method in cfg.init_methods:
+                label, method_args, gt_only = method_specs[method]
+                if gt_only and dataset not in LASER_DATASETS:
+                    continue
+                if method == "sfm" and strategy == "DefaultWithoutADCStrategy":
+                    continue
+                query = {
+                    **({} if method == "sfm" else common_args),
+                    "strategy": strategy,
+                    **method_args,
+                    **strategy_overrides(strategy),
+                }
+                try:
+                    frame = runs.get_per_scene_metrics_for_params(
+                        query, metrics=cfg.metrics
+                    )
+                except ValueError as exc:
+                    logging.warning(
+                        "Skipping %s / %s / %s: %s", dataset, strategy, label, exc
+                    )
+                    continue
+                if frame.empty:
+                    continue
+                dataset_frames.append(frame)
+                data[strategy][method].append(frame)
+            if dataset_frames:
+                drop_scenes_not_present_in_all(*dataset_frames, debug_out=False)
+
+    for strategy in cfg.strategies:
+        frames_per_method = {
+            method: pd.concat(frames)
+            for method, frames in data[strategy].items()
+            if frames
+        }
+        if not frames_per_method:
+            logging.warning("No plotting data found for strategy %s", strategy)
+            continue
+
+        fig, _ = per_scene_metric_dotplots(
+            data=frames_per_method,
+            labels={method: method_specs[method][0] for method in frames_per_method},
+            metrics=cfg.metrics,
+            title=(
+                STRATEGY_NAMES.get(strategy, strategy)
+                if cfg.show_strategy_title
+                else None
+            ),
+            show_scene_labels=cfg.show_scene_labels,
+        )
+        output_path = ctx.output_helper.get_graph_path("practical_analysis", strategy)
+        save_figure_svg(fig, output_path)
+        plt.close(fig)
 
 
 def gaussian_cap_ablation(ctx: ResultsContext, format_options: FormatOptions) -> None:
@@ -1416,97 +1795,6 @@ def _ablation(
     )
     print(f"Saved {section_name} ablation table to {path}")
     return pd.DataFrame([comb_row]).set_index("-"), means_per_dataset
-
-
-def _cell_data_across_strategies(
-    metric: str, strategy_dfs: list[pd.DataFrame]
-) -> CellData:
-    return cell_data_across_strategies(metric, strategy_dfs)
-
-
-def _ablation_aggregate_strategies(
-    ctx: ResultsContext,
-    format_options: FormatOptions,
-    section_name: str,
-    common_args: dict[str, object],
-    args: list[dict[str, object]],
-    labels: list[str],
-    strategies=ALL_STRATEGIES,
-    metrics=DEFAULT_TABLE_METRICS,
-    datasets=ALL_DATASETS_WITHOUT_ETH3D,
-    caption: str | None = None,
-    top_left_label: str = "",
-    delta: bool = False,
-) -> None:
-    """Ablation table with metrics in columns and one row per arg/label pair.
-
-    Unlike ``_ablation`` (which keeps one row per strategy), every cell here
-    aggregates across all ``strategies``: the mean is the mean of the per-strategy
-    scene means, and the reported spread (std/min/max) is computed across
-    strategies. Per-dataset results are emitted as subtables or separate tables
-    according to ``format_options``.
-
-    The first arg/label pair is the reference row (color map center); when
-    ``delta`` is set the remaining rows show signed deltas relative to it.
-    """
-    num_variants = len(args)
-    if (num_variants != len(labels)) or (num_variants < 2):
-        raise ValueError(
-            f"Number of args ({num_variants}) must match number of labels ({len(labels)}) and be at least 2."
-        )
-
-    tables: dict[str, str] = {}
-    for dataset in datasets:
-        runs = ctx.runs_per_dataset[dataset].copy()
-
-        # variant label -> per-strategy per-scene metrics dataframes
-        per_variant_strategy_dfs: dict[str, list[pd.DataFrame]] = {
-            label: [
-                runs.get_per_scene_metrics_for_params(
-                    {"strategy": strategy, **common_args, **args_i},
-                    metrics=metrics,
-                )
-                for strategy in strategies
-            ]
-            for label, args_i in zip(labels, args)
-        }
-
-        drop_scenes_not_present_in_all(
-            *[df for dfs in per_variant_strategy_dfs.values() for df in dfs],
-            debug_out=False,
-        )
-
-        # variant label -> metric -> CellData aggregated across strategies
-        cell_data: dict[str, dict[str, CellData]] = {
-            label: {
-                metric: _cell_data_across_strategies(metric, strategy_dfs)
-                for metric in metrics
-            }
-            for label, strategy_dfs in per_variant_strategy_dfs.items()
-        }
-
-        tables[dataset] = make_aggregated_metric_table(
-            cell_data=cell_data,
-            metrics=metrics,
-            latex_caption=DATASET_NAMES[dataset],
-            latex_label=f"{section_name}_{dataset}",
-            format_args=format_options,
-            row_order=labels,
-            top_left_label=top_left_label,
-            delta=delta,
-        )
-
-    path = ctx.output_helper.get_table_path(section_name)
-    write_file(
-        path,
-        finalize_per_dataset_tables(
-            tables,
-            format_options,
-            combined_caption=caption,
-            combined_label=section_name,
-        ),
-    )
-    print(f"Saved {section_name} ablation table to {path}")
 
 
 def _ablation_strategies_side_by_side(
@@ -1841,6 +2129,277 @@ def da3_floater_removal_ablation(
         print()
 
 
+def da3_scene_selection_ablation(
+    ctx: ResultsContext, format_options: FormatOptions
+) -> None:
+    """Improvement over SfM for DA3 / DA3 (GS) on all ScanNet++ scenes vs the
+    subset that lies in the DA3 test set.
+
+    One small table per ScanNet++ dataset (on- and off-trajectory) with a row per
+    init method and, per scene set, the mean delta over the SfM baseline across
+    strategies.
+    """
+    datasets = ["scannet++", "eval_on_train_set_scannet++"]
+    strategies = ALL_STRATEGIES_EXCEPT_NO_D
+    metrics = ["eval-all-test/psnr", "eval-all-test/ssim", "eval-all-test/lpips"]
+
+    common_args = {
+        "is_default_init_config": True,
+        "is_default_strategy_config": True,
+        "init.position_noise_std": "0.0",
+        "gaussian_cap_fraction": "1.0",
+        "dense_init.target_points_fraction": "1.0",
+        "dense_init.include_sparse": False,
+    }
+    init_method_specs: dict[str, dict[str, Any]] = {
+        "DA3": {"init_method": "da3", "init_method_config": "floater_removal=True"},
+        r"$\text{DA3}^\text{G.S.}$": {
+            "init_method": "da3",
+            "init_method_config": "output_gaussians=True_max_num_images=150",
+        },
+    }
+    scene_set_labels = ["All Scenes", "DA3 Test Scenes", "Excluded Scenes"]
+    metric_delta_headers = {
+        "eval-all-test/psnr": r"$\Delta$PSNR $\uparrow$",
+        "eval-all-test/ssim": r"$\Delta$SSIM $\uparrow$",
+        "eval-all-test/lpips": r"$\Delta$LPIPS $\downarrow$",
+    }
+
+    format_cell = make_cell_formatter(
+        format_options.cell_type, rounding_per_metric=TABLE_ROUNDING_PER_METRIC
+    )
+
+    def col_id(scene_set: str, metric: str) -> str:
+        return f"{scene_set}::{metric}"
+
+    metric_headers = " & ".join(
+        rf"\textbf{{{metric_delta_headers[metric]}}}" for metric in metrics
+    )
+    header_block = (
+        "& "
+        + " & ".join(
+            rf"\multicolumn{{{len(metrics)}}}"
+            rf"{{{'c' if i == len(scene_set_labels) - 1 else 'c|'}}}"
+            rf"{{\textbf{{{scene_set}}}}}"
+            for i, scene_set in enumerate(scene_set_labels)
+        )
+        + r" \\"
+        "\n"
+        r"\textbf{Init} & "
+        + " & ".join([metric_headers] * len(scene_set_labels))
+        + r" \\"
+    )
+
+    tables_per_dataset: dict[str, str] = {}
+    for dataset in datasets:
+        runs = ctx.runs_per_dataset[dataset].copy()
+        da3_test_scenes = {
+            f"{dataset}/{scene}" for scene in SCANNETPP_DA3_TEST_SCENE_SELECTION
+        }
+        excluded_scenes = {
+            f"{dataset}/{scene}"
+            for scene in SCANNETPP_SCENE_SELECTION
+            if scene not in SCANNETPP_DA3_TEST_SCENE_SELECTION
+        }
+        scene_sets: dict[str, set[str] | None] = {
+            "All Scenes": None,
+            "DA3 Test Scenes": da3_test_scenes,
+            "Excluded Scenes": excluded_scenes,
+        }
+
+        # init label -> list of per-strategy per-scene delta-over-SfM dataframes.
+        delta_dfs_per_init: dict[str, list[pd.DataFrame]] = {}
+        for init_label, spec in init_method_specs.items():
+            per_strategy: list[pd.DataFrame] = []
+            for strategy in strategies:
+                sfm_df = runs.get_per_scene_metrics_for_params(
+                    {"init_group": "sfm_baseline", "strategy": strategy},
+                    metrics=metrics,
+                )
+                init_df = runs.get_per_scene_metrics_for_params(
+                    {**common_args, "strategy": strategy, **spec}, metrics=metrics
+                )
+                drop_scenes_not_present_in_all(sfm_df, init_df, debug_out=False)
+                delta = init_df.copy()
+                for metric in metrics:
+                    delta[metric] = per_scene_metric_difference(
+                        init_df[metric],
+                        sfm_df[metric],
+                        label=f"{dataset}/{init_label}/{strategy}",
+                    )
+                per_strategy.append(delta)
+            delta_dfs_per_init[init_label] = per_strategy
+
+        columns = [
+            col_id(scene_set, metric)
+            for scene_set in scene_set_labels
+            for metric in metrics
+        ]
+        row_labels = list(init_method_specs.keys())
+        color_table = pd.DataFrame(index=row_labels, columns=columns, dtype=float)
+        text_table = pd.DataFrame(index=row_labels, columns=columns, dtype=object)
+
+        for metric in metrics:
+            multiplier = -1.0 if metric in LOWER_IS_BETTER_METRICS else 1.0
+            rounding = TABLE_ROUNDING_PER_METRIC[metric]
+            cell_means: dict[tuple[str, str], float] = {}
+            metric_max_abs = 0.0
+            for init_label in row_labels:
+                for scene_set in scene_set_labels:
+                    scene_filter = scene_sets[scene_set]
+                    strategy_dfs = [
+                        df
+                        if scene_filter is None
+                        else df.loc[df.index.intersection(scene_filter)]
+                        for df in delta_dfs_per_init[init_label]
+                    ]
+                    cell = cell_data_across_strategies(metric, strategy_dfs)
+                    rounded_mean = round(cell.mean, rounding)
+                    cell_means[(init_label, scene_set)] = rounded_mean
+                    metric_max_abs = max(metric_max_abs, abs(rounded_mean))
+                    text_table.loc[init_label, col_id(scene_set, metric)] = format_cell(
+                        cell
+                    )
+            for (init_label, scene_set), mean in cell_means.items():
+                normalized = (
+                    multiplier * mean / metric_max_abs if metric_max_abs else 0.0
+                )
+                color_table.loc[init_label, col_id(scene_set, metric)] = normalized
+
+        max_abs = float(color_table.abs().max().max())
+        color_range = (-1.2 * max_abs, 1.2 * max_abs)
+
+        tabular = tabular_colored_from_numeric_with_custom_text(
+            top_left_label="",
+            table=color_table,
+            text_table=text_table,
+            hide_nulls=False,
+            column_format="l|" + "|".join(["ccc"] * len(scene_set_labels)),
+            header_block=header_block,
+            color_range=color_range,
+            color_intensity=format_options.color_intensity,
+            force_black_text=format_options.force_black_text,
+        )
+        tables_per_dataset[dataset] = wrap_tabulars_as_float(
+            [tabular],
+            DATASET_NAMES.get(dataset, dataset),
+            f"da3_scene_selection_{name_to_path(dataset, allow_subdirs=False)}",
+            format_options,
+        )
+
+    path = ctx.output_helper.get_table_path("da3_scene_selection_ablation")
+    write_file(
+        path,
+        finalize_per_dataset_tables(
+            tables_per_dataset,
+            format_options,
+            combined_caption=(
+                "Improvement over SfM initialization for DA3 and "
+                r"$\text{DA3}^\text{G.S.}$ when evaluated over all ScanNet++ scenes "
+                "versus only the scenes in the DA3 test set. Values are the mean "
+                "delta over the SfM baseline across strategies."
+            ),
+            combined_label="da3_scene_selection_ablation",
+        ),
+    )
+    print(f"Saved DA3 scene selection ablation table to {path}")
+
+
+def laser_scan_hybrid_init_ablation(
+    ctx: ResultsContext, format_options: FormatOptions
+) -> None:
+    """Improvement from hybrid laser-scan init (adding sparse SfM points) across
+    strategies and init sizes.
+
+    Layout mirrors ``laser_scan_tables`` (strategies in rows, init sizes in
+    columns); each cell is the mean and (across-scene) std of the per-scene
+    metric delta between ``dense_init.include_sparse`` True and False.
+    """
+    common_args = {
+        "is_default_strategy_config": True,
+        "is_default_init_config": True,
+        "init.position_noise_std": "0.0",
+        "gaussian_cap_fraction": "1.0",
+        "init_method": "laser_scan",
+        "init_size_matches_gmax": True,
+    }
+    metrics = ["eval-all-test/psnr", "eval-all-test/ssim", "eval-all-test/lpips"]
+    strategies = ALL_STRATEGIES_EXCEPT_NO_D
+    size_fractions = ["0.5", "0.75", "1.0"]
+    size_labels = {
+        fraction: gmax_fraction_label(fraction) for fraction in size_fractions
+    }
+
+    tables: dict[str, str] = {}
+    for dataset in LASER_DATASETS:
+        print("Dataset:", dataset)
+        runs = ctx.runs_per_dataset[dataset].copy()
+
+        # strategy label -> size label -> per-scene hybrid-minus-plain delta df.
+        data: dict[str, dict[str, pd.DataFrame]] = {}
+        try:
+            for strategy in strategies:
+                strat_name = STRATEGY_NAMES[strategy]
+                for fraction in size_fractions:
+                    base = {
+                        **common_args,
+                        "strategy": strategy,
+                        "dense_init.target_points_fraction": fraction,
+                    }
+                    hybrid = runs.get_per_scene_metrics_for_params(
+                        {**base, "dense_init.include_sparse": True}, metrics=metrics
+                    )
+                    plain = runs.get_per_scene_metrics_for_params(
+                        {**base, "dense_init.include_sparse": False}, metrics=metrics
+                    )
+                    drop_scenes_not_present_in_all(hybrid, plain, debug_out=False)
+                    delta = hybrid.copy()
+                    for metric in metrics:
+                        delta[metric] = per_scene_metric_difference(
+                            hybrid[metric],
+                            plain[metric],
+                            label=f"{dataset}/{strat_name}/{size_labels[fraction]}",
+                        )
+                    data.setdefault(strat_name, {})[size_labels[fraction]] = delta
+        except ValueError as error:
+            ansiesc_print(
+                f"!!!!! Skipping dataset '{dataset}' for hybrid-init ablation: {error}",
+                ANSIEscapes.RED,
+            )
+            continue
+
+        drop_uncommon_scenes(data, debug_out=False)
+
+        tables[dataset] = make_latex_table_for_metrics(
+            data=data,
+            latex_caption=DATASET_NAMES[dataset],
+            latex_label=f"laser_scan_hybrid_init_ablation_{dataset}",
+            metrics=metrics,
+            column_order=[size_labels[fraction] for fraction in size_fractions],
+            row_order=[STRATEGY_NAMES[strategy] for strategy in strategies],
+            format_args=format_options,
+            horizontal_cols_label="Init size",
+            cmap=DIVERGING_CMAP,
+            center_zero=True,
+        )
+
+    path = ctx.output_helper.get_table_path("laser_scan_hybrid_init_ablation")
+    write_file(
+        path,
+        finalize_per_dataset_tables(
+            tables,
+            format_options,
+            combined_caption=(
+                "Improvement from hybrid laser-scan initialization (adding sparse "
+                "SfM points) across strategies and initialization sizes. Each cell "
+                "is the mean and across-scene std of the per-scene metric delta."
+            ),
+            combined_label="laser_scan_hybrid_init_ablation",
+        ),
+    )
+    print(f"Saved laser scan hybrid init ablation table to {path}")
+
+
 def dense_init_half_size_ablation(
     ctx: ResultsContext, format_options: FormatOptions
 ) -> None:
@@ -1985,13 +2544,17 @@ SectionFn = Callable[..., None]
 
 SECTION_FUNCTIONS: list[SectionFn] = [
     laser_scan_tables,
+    laser_scan_analysis_plots,
     improvement_tables,
     practical_tables,
+    practical_analysis_plots,
     init_times,
     # Ablations:
     noise_resiliency,
     da3_gs_components_ablation,
     da3_floater_removal_ablation,
+    da3_scene_selection_ablation,
+    laser_scan_hybrid_init_ablation,
     edgs_scale_increase_ablation,
     idhfr_means_lr_ablation,
     gaussian_cap_ablation,
@@ -2030,6 +2593,18 @@ DEFAULT_SECTION_FORMAT_OVERRIDES = {
         resizebox=True,
     ),
     da3_gs_components_ablation.__name__: FormatOptions(
+        cell_type=TableCellType.mean,
+        metrics_layout=MetricsLayout.horizontal,
+        table_env_override="table",
+        resizebox=True,
+    ),
+    da3_scene_selection_ablation.__name__: FormatOptions(
+        cell_type=TableCellType.scene_std,
+        metrics_layout=MetricsLayout.horizontal,
+        table_env_override="table",
+        resizebox=True,
+    ),
+    laser_scan_hybrid_init_ablation.__name__: FormatOptions(
         cell_type=TableCellType.mean,
         metrics_layout=MetricsLayout.horizontal,
         table_env_override="table",

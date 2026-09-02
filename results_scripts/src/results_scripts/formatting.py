@@ -16,8 +16,8 @@ class TableCellType(StrEnum):
     std = enum.auto()
     minmax = enum.auto()
     range_only = enum.auto()
-    all_runwise = enum.auto()
     scene_std = enum.auto()
+    median_and_mean_std = enum.auto()
 
 
 class MetricsLayout(StrEnum):
@@ -49,9 +49,7 @@ class FormatOptions:
     color_intensity: float = 1.0
     # When True, all cell text is rendered black regardless of cell background
     # (instead of switching to light text on dark cells).
-    force_black_text: bool = (
-        False  # Fraction (in [0, 1]) of the top of the value range to color in value-cmap
-    )
+    force_black_text: bool = False  # Fraction (in [0, 1]) of the top of the value range to color in value-cmap
     # tables; cells below `vmax - color_best_fract * (vmax - vmin)` stay white.
     # 1.0 colors everything. The gradient is restretched over the colored slice
     # so those cells use the full colormap. Has no effect on diverging tables.
@@ -84,28 +82,32 @@ class FormatOptions:
 class CellData(typing.NamedTuple):
     metric_id: str
     mean: float
-    stddev: float
+    seed_stddev: float
     min: float
     max: float
 
     scene_stddev: float
 
-    mean_measurement_count: float
+    median_seed_stddev: float = -1
 
     @staticmethod
     def for_metric(df: pd.DataFrame, metric_id: str) -> "CellData":
         return CellData(
             metric_id=metric_id,
             mean=df[metric_id].map(lambda x: np.array(x).mean()).mean(skipna=False),
-            stddev=df[metric_id].map(lambda x: np.array(x).std()).mean(skipna=False),
+            seed_stddev=df[metric_id]
+            .map(lambda x: np.array(x).var())
+            .map(np.sqrt)
+            .mean(skipna=False),
+            median_seed_stddev=df[metric_id]
+            .map(lambda x: np.array(x).std())
+            .map(np.median)
+            .mean(skipna=False),
             min=df[metric_id].map(lambda x: np.array(x).min()).mean(skipna=False),
             max=df[metric_id].map(lambda x: np.array(x).max()).mean(skipna=False),
             scene_stddev=df[metric_id]
             .map(lambda x: np.array(x).mean())
             .std(skipna=False),
-            mean_measurement_count=df[metric_id]
-            .map(lambda x: len(x))
-            .mean(skipna=False),
         )
 
 
@@ -131,20 +133,18 @@ def make_cell_formatter(
     if cell_type == TableCellType.mean:
         return lambda x: f"${mean_with_sign(x)}$"
     elif cell_type == TableCellType.std:
-        return lambda x: (f"${mean_with_sign(x)} \\pm {x.stddev:.{get_rounding(x)}f}$")
+        return lambda x: (
+            f"${mean_with_sign(x)} \\pm {x.seed_stddev:.{get_rounding(x)}f}$"
+        )
     elif cell_type == TableCellType.minmax:
-        return (
-            lambda x: f"${mean_with_sign(x)} \\in [{format_number_compactly(x.min)},{format_number_compactly(x.max)}]$"
+        return lambda x: (
+            f"${mean_with_sign(x)} \\in [{format_number_compactly(x.min)},{format_number_compactly(x.max)}]$"
         )
     elif cell_type == TableCellType.range_only:
         return lambda x: f"[{x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f}]"
-    elif cell_type == TableCellType.all_runwise:
-        return (
-            lambda x: f"${mean_with_sign(x)} \\pm {x.stddev:.{get_rounding(x)}f} ({x.min:.{get_rounding(x)}f}, {x.max:.{get_rounding(x)}f})$"
-        )
     elif cell_type == TableCellType.scene_std:
-        return (
-            lambda x: f"${mean_with_sign(x)} \\pm {x.scene_stddev:.{get_rounding(x)}f}$"
+        return lambda x: (
+            f"${mean_with_sign(x)} \\pm {x.scene_stddev:.{get_rounding(x)}f}$"
         )
     else:
         raise ValueError(f"Invalid format table cell type: {cell_type}")
