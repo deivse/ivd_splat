@@ -48,9 +48,86 @@ class OutputDirHelper:
             / f"{name_to_path(table_name, allow_subdirs=False)}.tex"
         )
 
+    def get_stats_path(self, name: str, suffix: str = "csv") -> Path:
+        return (
+            self.output_dir
+            / "statistics"
+            / f"{name_to_path(name, allow_subdirs=False)}.{suffix}"
+        )
+
 
 def fraction_name(fraction: str | float) -> str:
     return f"{float(fraction) * 100:.0f}% $G_\\mathit{{max}}$"
+
+
+def print_friedman_summary(
+    records: list[tuple[str, str, str, float | None]],
+    *,
+    alpha: float = 0.05,
+    title: str = "Friedman test p-values (* = row passed, omnibus null rejected):",
+) -> None:
+    """Print per-dataset tables of Friedman outcomes to stdout.
+
+    Each record is ``(group, row, metric, p_value)``: ``group`` is the dataset
+    label (use ``""`` when unused), ``row`` the tested row (strategy), ``metric``
+    the metric-column label and ``p_value`` the Friedman p-value (or ``None`` when
+    the test could not be run). One table is printed per dataset with strategies
+    as rows and metrics as columns; a cell shows the p-value with a trailing ``*``
+    when the null was rejected (``n/a`` when the test could not run).
+    """
+    if not records:
+        return
+
+    # Group records by dataset, preserving first-seen order.
+    groups: list[str] = []
+    per_group: dict[str, list[tuple[str, str, float | None]]] = {}
+    for group, row, metric, p_value in records:
+        if group not in per_group:
+            per_group[group] = []
+            groups.append(group)
+        per_group[group].append((row, metric, p_value))
+
+    def render_table(group_records: list[tuple[str, str, float | None]]) -> str:
+        metric_cols: list[str] = []
+        row_keys: list[str] = []
+        cells: dict[str, dict[str, str]] = {}
+        for row, metric, p_value in group_records:
+            if metric not in metric_cols:
+                metric_cols.append(metric)
+            if row not in cells:
+                cells[row] = {}
+                row_keys.append(row)
+            if p_value is None:
+                cells[row][metric] = "n/a"
+            else:
+                cells[row][metric] = f"{p_value:.2g}" + ("*" if p_value < alpha else "")
+
+        headers = ["Strategy"] + metric_cols
+        table_rows = [
+            [row] + [cells[row].get(metric, "") for metric in metric_cols]
+            for row in row_keys
+        ]
+        widths = [
+            max(len(headers[i]), *(len(r[i]) for r in table_rows))
+            for i in range(len(headers))
+        ]
+
+        def fmt_row(cols: list[str]) -> str:
+            return "  ".join(col.ljust(widths[i]) for i, col in enumerate(cols))
+
+        lines = [fmt_row(headers), "  ".join("-" * width for width in widths)]
+        lines += [fmt_row(row) for row in table_rows]
+        return "\n".join(lines)
+
+    print()
+    print(title)
+    for group in groups:
+        print()
+        if group:
+            print(f"[{group}]")
+        print(render_table(per_group[group]))
+    print()
+
 
 
 def gmax_fraction_label(fraction: str | float) -> str:

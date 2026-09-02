@@ -1,11 +1,207 @@
 from typing import Iterable, Literal
 
+from matplotlib.artist import Artist
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 import numpy as np
 import pandas as pd
 
-from results_scripts.constants import METRIC_PRETTY_NAMES, DEFAULT_TABLE_METRICS
+from results_scripts.constants import (
+    DATASET_NAMES,
+    METRIC_PRETTY_NAMES,
+    DEFAULT_TABLE_METRICS,
+)
+
+
+def per_scene_metric_dotplots(
+    data: dict[str, pd.DataFrame],
+    labels: dict[str, str],
+    metrics: list[str],
+    title: str | None,
+    show_scene_labels: bool = True,
+) -> tuple[plt.Figure, np.ndarray]:
+    """Plot raw observations with an independently scaled column per dataset."""
+    all_scenes = set().union(*(set(frame.index) for frame in data.values()))
+    datasets = list(
+        dict.fromkeys(
+            scene.split("/", 1)[0]
+            for frame in data.values()
+            for scene in frame.index
+            if scene in all_scenes
+        )
+    )
+    scenes_per_dataset = {
+        dataset: sorted(
+            scene for scene in all_scenes if scene.split("/", 1)[0] == dataset
+        )
+        for dataset in datasets
+    }
+    figure_width = max(10.0, 0.4 * len(all_scenes))
+    fig, axes = plt.subplots(
+        len(metrics),
+        len(datasets),
+        figsize=(figure_width, 1.75 * len(metrics)),
+        squeeze=False,
+        gridspec_kw={
+            "width_ratios": [len(scenes_per_dataset[name]) for name in datasets],
+        },
+    )
+    dot_configs = [config for config in data if config != "sfm"]
+    offsets = dict(zip(dot_configs, np.linspace(-0.3, 0.3, max(1, len(dot_configs)))))
+    accent_colors = plt.get_cmap("tab20")(np.arange(0, 20, 2))
+    seed_colors = plt.get_cmap("Dark2")(np.linspace(0, 1, 8))
+
+    for metric_index, metric in enumerate(metrics):
+        for dataset_index, dataset in enumerate(datasets):
+            ax = axes[metric_index, dataset_index]
+            scenes = scenes_per_dataset[dataset]
+            x_by_scene = {scene: index for index, scene in enumerate(scenes)}
+            for x_value in x_by_scene.values():
+                ax.axvline(x_value, color="0.88", linewidth=0.7, zorder=0)
+
+            config_positions = {
+                **({"sfm": -0.38} if "sfm" in data else {}),
+                **offsets,
+            }
+            for scene in scenes:
+                values_per_config = {
+                    config: np.atleast_1d(frame.loc[scene, metric]).astype(float)
+                    for config, frame in data.items()
+                    if metric in frame and scene in frame.index
+                }
+                max_seed_count = max(
+                    (len(values) for values in values_per_config.values()), default=0
+                )
+                for seed_index in range(max_seed_count):
+                    paired_points = [
+                        (
+                            x_by_scene[scene] + config_positions[config],
+                            values[seed_index],
+                        )
+                        for config, values in values_per_config.items()
+                        if seed_index < len(values) and np.isfinite(values[seed_index])
+                    ]
+                    paired_points.sort(key=lambda point: point[0])
+                    if len(paired_points) >= 2:
+                        ax.plot(
+                            [point[0] for point in paired_points],
+                            [point[1] for point in paired_points],
+                            color=seed_colors[seed_index % len(seed_colors)],
+                            alpha=0.4,
+                            linewidth=0.45,
+                            zorder=1,
+                        )
+
+            for config_index, config in enumerate(dot_configs):
+                frame = data[config]
+                if metric not in frame:
+                    continue
+                x_values: list[float] = []
+                mean_x_values: list[float] = []
+                y_values: list[float] = []
+                mean_y_values: list[float] = []
+                for scene, values in frame[metric].items():
+                    if scene not in x_by_scene:
+                        continue
+                    metric_values = np.atleast_1d(values).astype(float)
+                    finite_values = metric_values[np.isfinite(metric_values)]
+                    x_values.extend(
+                        [x_by_scene[scene] + offsets[config]] * len(finite_values)
+                    )
+                    mean_x_values.append(x_by_scene[scene] + offsets[config])
+                    y_values.extend(finite_values.tolist())
+                    mean_y_values.append(finite_values.mean())
+                ax.scatter(
+                    x_values,
+                    y_values,
+                    s=14,
+                    color=accent_colors[config_index % len(accent_colors)],
+                    alpha=0.85,
+                    # edgecolors="transparent",
+                    linewidths=0,
+                    label=labels.get(config, config),
+                    zorder=2,
+                )
+                # ax.scatter(
+                #     mean_x_values,
+                #     mean_y_values,
+                #     s=24,
+                #     color=accent_colors[config_index % len(accent_colors)],
+                #     # edgecolors="white",
+                #     linewidths=1.0,
+                #     alpha=1.0,
+                #     marker="_",
+                #     zorder=3,
+                # )
+            sfm_frame = data.get("sfm")
+            if sfm_frame is not None and metric in sfm_frame:
+                sfm_x_values: list[int] = []
+                sfm_y_values: list[float] = []
+                mean_sfm_x_values: list[float] = []
+                mean_sfm_y_values: list[float] = []
+                for scene, values in sfm_frame[metric].items():
+                    if scene not in x_by_scene:
+                        continue
+                    metric_values = np.atleast_1d(values).astype(float)
+                    finite_values = metric_values[np.isfinite(metric_values)]
+                    sfm_x_values.extend([x_by_scene[scene]] * len(finite_values))
+                    sfm_y_values.extend(finite_values.tolist())
+                    mean_sfm_x_values.append(x_by_scene[scene])
+                    mean_sfm_y_values.append(finite_values.mean())
+                ax.hlines(
+                    sfm_y_values,
+                    np.asarray(sfm_x_values) - 0.38,
+                    np.asarray(sfm_x_values) + 0.38,
+                    color="gray",
+                    alpha=0.5,
+                    linewidth=1,
+                    label=labels.get("sfm", "sfm"),
+                    zorder=1,
+                )
+                ax.hlines(
+                    mean_sfm_y_values,
+                    np.asarray(mean_sfm_x_values) - 0.38,
+                    np.asarray(mean_sfm_x_values) + 0.38,
+                    color="black",
+                    alpha=1.0,
+                    linewidth=1,
+                    zorder=4,
+                )
+            if metric_index == 0 and len(datasets) > 1:
+                ax.set_title(DATASET_NAMES.get(dataset, dataset))
+            if dataset_index == 0:
+                ax.set_ylabel(METRIC_PRETTY_NAMES.get(metric, metric))
+            else:
+                ax.spines["left"].set_color("0.3")
+                ax.spines["left"].set_linewidth(1.5)
+            if metric_index == len(metrics) - 1 and show_scene_labels:
+                ax.set_xticks(range(len(scenes)))
+                ax.set_xticklabels(
+                    [scene.split("/", 1)[-1] for scene in scenes],
+                    rotation=60,
+                    ha="right",
+                )
+                ax.set_xlabel("Scene")
+            else:
+                ax.set_xticks([])
+            ax.grid(axis="y", color="0.9", linewidth=0.7)
+
+    legend_entries: dict[str, Artist] = {}
+    for ax in axes.flat:
+        handles, legend_labels = ax.get_legend_handles_labels()
+        legend_entries.update(zip(legend_labels, handles))
+    fig.legend(
+        legend_entries.values(),
+        legend_entries.keys(),
+        loc="lower center",
+        ncol=max(1, len(legend_entries)),
+        bbox_to_anchor=(0.5, 0.001),
+        fontsize=11,
+    )
+    if title:
+        fig.suptitle(title, y=1.01)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    return fig, axes
 
 
 def format_number_compactly(val: float):
