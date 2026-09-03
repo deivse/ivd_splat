@@ -129,7 +129,6 @@ def print_friedman_summary(
     print()
 
 
-
 def gmax_fraction_label(fraction: str | float) -> str:
     """LaTeX label for a multiple of the max Gaussian count, e.g.
     ``$0.75\\mathcal{G}_\\mathit{max}$``.
@@ -154,3 +153,14 @@ def save_figure_svg(
     kwargs.setdefault("bbox_inches", "tight")
     fig.savefig(output, format="svg", **kwargs)
     print(f"Saved: {output}")
+
+
+MARK_SPARSE = "+"
+MARK_HALF = "0.5"
+
+
+def col_label_with_mark(col: str, mark: str, apply: bool = True) -> str:
+    """Return the column label with a sparse or half init mark if applicable."""
+    if apply:
+        return f"$\\text{{{col}}}^{{{mark}}}$"
+    return col

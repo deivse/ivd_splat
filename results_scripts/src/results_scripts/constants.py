@@ -145,6 +145,7 @@ PHOTOMETRIC_METRICS = [f"eval-all-test/{metric}" for metric in ["psnr", "ssim", 
 # the warm end of the color map, regardless of metric direction).
 LOWER_IS_BETTER_METRICS = {
     "eval-all-test/lpips",
+    "eval-all-test/lpips_vgg",
     "train/num-gaussians",
     "train/total-train-time",
 }
@@ -154,6 +155,7 @@ METRIC_BASE_NAMES = {
     "eval-all-test/psnr": "PSNR",
     "eval-all-test/ssim": "SSIM",
     "eval-all-test/lpips": "LPIPS",
+    "eval-all-test/lpips_vgg": "LPIPS (VGG)",
     "train/num-gaussians": "Num Gaussians",
     "train/total-train-time": "Train Time (min)",
     "fscore": "F-Score (\\%)",
