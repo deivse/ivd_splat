@@ -20,6 +20,56 @@ from statsmodels.stats.multitest import multipletests
 
 from results_scripts.formatting import CellData
 
+def hedges_g(baseline: pd.Series, method: pd.Series) -> pd.Series:
+    """Hedges' g effect size for paired samples, with small-sample correction.
+
+    Both inputs are per-scene Series whose cells are arrays of per-seed values
+    (ordered consistently by ``eval_iter``; see ``RunsInfo.get_per_scene_metrics_for_params``). For each shared scene the seed
+    arrays are subtracted elementwise, so the result is a per-scene Series of
+    per-seed delta arrays that preserves the seed-level spread. Scenes present in
+    ``method`` but missing from ``baseline`` (or with mismatched seed counts) are
+    warned about via ``label`` and aligned by truncation to the common seeds.
+    """
+    common = baseline.index.intersection(method.index)
+    if len(common) < len(baseline.index):
+        missing = list(set(baseline.index) - set(common))
+        logging.warning(
+            "hedges_g: %d scene(s) missing in method: %s",
+            len(missing),
+            missing,
+        )
+
+    effect_sizes: dict[str, float] = {}
+    for scene in baseline.index:
+        if scene not in common:
+            effect_sizes[scene] = float("nan")
+            continue
+        a = np.atleast_1d(np.asarray(baseline.loc[scene], dtype=float))
+        b = np.atleast_1d(np.asarray(method.loc[scene], dtype=float))
+        n = min(a.size, b.size)
+        if a.size != b.size:
+            logging.warning(
+                "hedges_g: scene %s seed-count mismatch (%d vs %d); truncating to %d.",
+                scene,
+                a.size,
+                b.size,
+                n,
+            )
+        delta = b[:n] - a[:n]
+        mean_delta = delta.mean()
+        pooled_stddev = np.sqrt(
+            ((a[:n].std(ddof=1) ** 2) + (b[:n].std(ddof=1) ** 2)) / 2
+        )
+        if pooled_stddev == 0.0:
+            effect_sizes[scene] = float("nan")
+            continue
+        g = mean_delta / pooled_stddev
+        # Small-sample correction factor (Hedges & Olkin, 1985).
+        correction_factor = 1 - (3 / (4 * n * 2 - 9))
+        effect_sizes[scene] = g * correction_factor
+
+    return pd.Series(effect_sizes, name=f"{method.name} vs {baseline.name}")
+
 
 def series_mean_frame_mean(df: pd.DataFrame | pd.Series) -> pd.Series:
     """Mean over eval-iter lists in each cell, then mean over scenes."""

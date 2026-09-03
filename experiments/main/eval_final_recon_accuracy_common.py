@@ -1762,6 +1762,10 @@ def write_metrics_latex_table(
         TABLE_ROUNDING_PER_METRIC,
     )
     from results_scripts.formatting import FormatOptions
+    from results_scripts.statistics import (
+        friedman_holm_improvements_over_control,
+    )
+    from results_scripts.utils import print_friedman_summary
     from results_scripts.tables import (
         VALUE_CMAP,
         tabular_colored_from_numeric_with_custom_text,
@@ -1830,6 +1834,19 @@ def write_metrics_latex_table(
                     break
         return count
 
+    def metric_by_scene(strategy: str, column: str, metric: str) -> pd.Series:
+        """Raw metric values indexed by scene for one reconstruction-table cell."""
+        values: dict[str, float] = {}
+        for scene in scenes:
+            for entry in resolved_runs[scene]:
+                if entry["strategy"] == strategy and entry["column"] == column:
+                    entry_metrics = entry.get("metrics")
+                    value = entry_metrics.get(metric) if entry_metrics else None
+                    if value is not None:
+                        values[scene] = float(value)
+                    break
+        return pd.Series(values, dtype=float)
+
     # A fully-covered cell aggregates over every evaluated scene. Any cell with
     # fewer scenes (a scene failed / is missing) would silently average over a
     # smaller denominator, so it is blanked instead of reporting a partial mean.
@@ -1839,6 +1856,53 @@ def write_metrics_latex_table(
         for column in columns_raw
     }
     max_scene_count = max(cell_counts.values(), default=0)
+
+    sfm_columns = [column for column in columns_raw if column.startswith("sfm=")]
+    significant_cells: set[tuple[str, str, str]] = set()
+    if len(sfm_columns) == 1:
+        sfm_column = sfm_columns[0]
+        friedman_records: list[tuple[str, str, str, float | None]] = []
+        for strategy in strategies_raw:
+            if strategy == AT_INIT_ROW_LABEL:
+                continue
+            # Compare the SfM control against every fully-covered init column for
+            # this strategy (Friedman needs a consistent set of methods).
+            eligible = [
+                column
+                for column in columns_raw
+                if column == sfm_column
+                or cell_counts[(strategy, column)] >= max_scene_count
+            ]
+            if sfm_column not in eligible or len(eligible) < 2:
+                continue
+            for metric in metric_keys:
+                per_method = {
+                    column: metric_by_scene(strategy, column, metric)
+                    for column in eligible
+                }
+                friedman, significant = friedman_holm_improvements_over_control(
+                    per_method,
+                    control=sfm_column,
+                    lower_is_better=metric in LOWER_IS_BETTER_METRICS,
+                    alpha=0.05,
+                )
+                friedman_records.append(
+                    (
+                        "",
+                        _latex_format_row_label(strategy),
+                        metric,
+                        friedman.p_value if friedman is not None else None,
+                    )
+                )
+                significant_cells.update(
+                    (metric, strategy, column) for column in significant
+                )
+        print_friedman_summary(friedman_records)
+    elif sfm_columns:
+        _LOGGER.warning(
+            "Skipping significance markers: expected exactly one SfM column, found %s.",
+            sfm_columns,
+        )
 
     row_labels = [_latex_format_row_label(s) for s in strategies_raw]
     col_labels = [_latex_format_col_label(c) for c in columns_raw]
@@ -1871,8 +1935,13 @@ def write_metrics_latex_table(
             for metric in metric_keys:
                 rounding = TABLE_ROUNDING_PER_METRIC.get(metric, 2)
                 value = means[metric]
-                parts.append("--" if np.isnan(value) else f"{value:.{rounding}f}")
-            text_table.loc[row_label, col_label] = "$" + " / ".join(parts) + "$"
+                text = "--" if np.isnan(value) else f"{value:.{rounding}f}"
+                if (metric, strategy, column) in significant_cells:
+                    text += r"$\rlap{\textsuperscript{*}}"
+                else:
+                    text += "$"
+                parts.append("$" + text)
+            text_table.loc[row_label, col_label] = " / ".join(parts)
 
     # Blank the "At Init" laser-scan cell(s): scoring the laser-scan init points
     # against the laser scan itself is a trivial perfect 100 that both squashes
@@ -1898,7 +1967,13 @@ def write_metrics_latex_table(
     )
     latex = wrap_tabulars_as_float(
         [tabular],
-        latex_caption=caption,
+        latex_caption=(
+            caption
+            + r". $^{*}$ indicates a statistically significant improvement over SfM "
+            "(Friedman test with Holm's step-down procedure)"
+            if len(sfm_columns) == 1
+            else caption
+        ),
         latex_label=label,
         format_args=FormatOptions(combine_datasets_as_subtables=False),
     )

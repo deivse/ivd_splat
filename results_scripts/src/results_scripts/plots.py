@@ -204,7 +204,7 @@ def per_scene_metric_dotplots(
     return fig, axes
 
 
-def format_number_compactly(val: float):
+def format_number_compactly(val: float, strip_leading_zero: bool = False) -> str:
     if abs(val) < 1:
         return f"{val:.3f}"[1:]
     if abs(val) < 10:
@@ -217,7 +217,10 @@ def format_number_compactly(val: float):
         val /= 1000
         suffix_index += 1
     num_digits = 1 if val < 100 else 0
-    return f"{val:.{num_digits}f}{suffixes[suffix_index]}"
+    out = f"{val:.{num_digits}f}{suffixes[suffix_index]}"
+    if strip_leading_zero and out.startswith("0."):
+        out = out[1:]
+    return out
 
 
 def per_metric_barplots_for_each_config(

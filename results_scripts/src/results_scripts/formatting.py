@@ -96,11 +96,11 @@ class CellData(typing.NamedTuple):
             metric_id=metric_id,
             mean=df[metric_id].map(lambda x: np.array(x).mean()).mean(skipna=False),
             seed_stddev=df[metric_id]
-            .map(lambda x: np.array(x).var())
+            .map(lambda x: np.array(x).var(ddof=1) if len(x) > 1 else 0.0)
             .map(np.sqrt)
             .mean(skipna=False),
             median_seed_stddev=df[metric_id]
-            .map(lambda x: np.array(x).std())
+            .map(lambda x: np.array(x).std(ddof=1) if len(x) > 1 else 0.0)
             .map(np.median)
             .mean(skipna=False),
             min=df[metric_id].map(lambda x: np.array(x).min()).mean(skipna=False),
