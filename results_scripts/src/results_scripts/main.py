@@ -46,6 +46,7 @@ from results_scripts.constants import (
     ALL_DATASETS_WITHOUT_ETH3D,
     ALL_STRATEGIES,
     ALL_STRATEGIES_EXCEPT_NO_D,
+    BASE_DATASETS,
     BASE_DATASETS_WITHOUT_ETH3D,
     DATASET_NAMES,
     DENSE_INIT_METRICS,
@@ -85,6 +86,12 @@ from results_scripts.utils import (
     print_friedman_summary,
     save_figure_svg,
     write_file,
+)
+
+from results_scripts.utils import (
+    MARK_HALF,
+    MARK_SPARSE,
+    col_label_with_mark,
 )
 
 # Registry mapping a section function's name to the dataclass holding its extra,
@@ -1123,7 +1130,6 @@ def practical_tables(
         metrics_to_collect += ["eval-all-test/lpips_vgg"]
         metrics_to_show += ["eval-all-test/lpips_vgg"]
 
-
     method_id_to_col = {
         "sfm": COL_SFM,
         "edgs": COL_EDGS,
@@ -1134,6 +1140,14 @@ def practical_tables(
         "da3_gs": COL_DA3_GS_INIT,
         "laser_scan": COL_LASER,
     }
+
+    if cfg.include_sparse_for_all == "both":
+        cfg.include_sparse_for_laser_scannet = False  # Will be handled in "both" case.
+
+    def include_sparse_for_laser(dataset: str) -> bool:
+        return cfg.include_sparse_for_all == "yes" or (
+            cfg.include_sparse_for_laser_scannet and "scannet++" in dataset
+        )
 
     PRACTICAL_COLS = [
         method_id_to_col[method_id]
@@ -1168,8 +1182,6 @@ def practical_tables(
         COL_DA3_GS_INIT,
         COL_LASER,
     ]
-    MARK_SPARSE = "+"
-    MARK_HALF = "0.5"
 
     # Base query params per practical init-method column (strategy is injected by
     # the collector). The per-config dense-init size/sparse flags are added below.
@@ -1226,10 +1238,10 @@ def practical_tables(
                 # Sparse-only variant (relies on the default init size).
                 specs.append(
                     ColumnSpec(
-                        f"$\\text{{{col}}}^{{{MARK_SPARSE}}}$",
+                        col_label_with_mark(col, MARK_SPARSE),
                         {**base, "dense_init.include_sparse": True},
-                    ),
-                    metrics=metrics_to_collect,
+                        metrics=metrics_to_collect,
+                    )
                 )
             if (
                 cfg.include_half_init_size_for_all == "both"
@@ -1237,7 +1249,7 @@ def practical_tables(
             ):
                 specs.append(
                     ColumnSpec(
-                        f"$\\text{{{col}}}^{{{MARK_HALF}}}$",
+                        col_label_with_mark(col, MARK_HALF),
                         {
                             **base,
                             "dense_init.target_points_fraction": "0.5",
@@ -1246,60 +1258,52 @@ def practical_tables(
                                 and col in INCLUDE_SPARSE_COLS
                             ),
                         },
-                        metrics=metrics_to_collect
+                        metrics=metrics_to_collect,
                     )
                 )
         return specs
 
     def laser_column_specs() -> list[ColumnSpec]:
         base = {"init_method": "laser_scan", "init_size_matches_real_init": True}
+
         specs = [
             ColumnSpec(
-                COL_LASER,
+                col_label_with_mark(
+                    COL_LASER, MARK_SPARSE, apply=include_sparse_for_laser(dataset)
+                ),
                 {
                     **base,
                     "dense_init.target_points_fraction": default_target_fraction,
-                    "dense_init.include_sparse": (cfg.include_sparse_for_all == "yes")
-                    or (
-                        cfg.include_sparse_for_laser_scannet
-                        and "scannet++" in dataset
-                        and cfg.include_sparse_for_all != "both"
-                    ),
+                    "dense_init.include_sparse": include_sparse_for_laser(dataset),
                 },
                 gt_only=True,
-                metrics=metrics_to_collect
+                metrics=metrics_to_collect,
             )
         ]
         if cfg.include_sparse_for_all == "both":
             specs.append(
                 ColumnSpec(
-                    f"$\\text{{{COL_LASER}}}^{{{MARK_SPARSE}}}$",
+                    col_label_with_mark(COL_LASER, MARK_SPARSE),
                     {
                         **base,
                         "dense_init.target_points_fraction": "1.0",
                         "dense_init.include_sparse": True,
                     },
                     gt_only=True,
-                    metrics=metrics_to_collect
+                    metrics=metrics_to_collect,
                 )
             )
         if cfg.include_half_init_size_for_all == "both":
             specs.append(
                 ColumnSpec(
-                    f"$\\text{{{COL_LASER}}}^{{{MARK_HALF}}}$",
+                    col_label_with_mark(COL_LASER, MARK_HALF),
                     {
                         **base,
                         "dense_init.target_points_fraction": "0.5",
-                        "dense_init.include_sparse": (
-                            cfg.include_sparse_for_all == "yes"
-                        )
-                        or (
-                            cfg.include_sparse_for_laser_scannet
-                            and "scannet++" in dataset
-                        ),
+                        "dense_init.include_sparse": include_sparse_for_laser(dataset),
                     },
                     gt_only=True,
-                    metrics=metrics_to_collect
+                    metrics=metrics_to_collect,
                 )
             )
         return specs
@@ -1322,8 +1326,13 @@ def practical_tables(
             collect_columns(
                 runs,
                 [s for s in cfg.strategies if s != "DefaultWithoutADCStrategy"],
-                [ColumnSpec(COL_SFM, {"init_group": "sfm_baseline"}, metrics=metrics_to_collect)],
-                
+                [
+                    ColumnSpec(
+                        COL_SFM,
+                        {"init_group": "sfm_baseline"},
+                        metrics=metrics_to_collect,
+                    )
+                ],
                 strategy_overrides=_strat_arg_overrides,
                 skip_empty=True,
                 into=data,
@@ -1361,18 +1370,27 @@ def practical_tables(
         data_per_dataset[dataset] = data
 
     significant_cells = (
-        significant_improvement_cells(data_per_dataset, sfm_column=COL_SFM, metrics=metrics_to_show)
+        significant_improvement_cells(
+            data_per_dataset, sfm_column=COL_SFM, metrics=metrics_to_show
+        )
         if "sfm" in cfg.init_methods
         else {}
     )
 
     col_order = ALL_COLS.copy()
+    if any(include_sparse_for_laser(dataset) for dataset in data_per_dataset.keys()):
+        # Add the sparse-only version of the laser column after its main column.
+        if COL_LASER in col_order:
+            # replace with its sparse-only version.
+            col_order[col_order.index(COL_LASER)] = col_label_with_mark(
+                COL_LASER, MARK_SPARSE
+            )
     if cfg.include_sparse_for_all == "both":
         # Add the sparse-only versions of the applicable methods after their main
         # columns.
         for col in [COL_MONODEPTH, COL_DA3, COL_DA3_NO_FLOATER_REMOVAL, COL_LASER]:
             if col in col_order:
-                sparse_col = f"$\\text{{{col}}}^{{{MARK_SPARSE}}}$"
+                sparse_col = col_label_with_mark(col, MARK_SPARSE)
                 col_order.insert(col_order.index(col) + 1, sparse_col)
     if cfg.include_half_init_size_for_all == "both":
         # Add the half-size versions of the applicable methods after their main
@@ -1387,7 +1405,7 @@ def practical_tables(
             COL_LASER,
         ]:
             if col in col_order:
-                half_col = f"$\\text{{{col}}}^{{{MARK_HALF}}}$"
+                half_col = col_label_with_mark(col, MARK_HALF)
                 col_order.insert(col_order.index(col), half_col)
 
     tables = {}
@@ -1473,9 +1491,9 @@ class PracticalAnalysisPlotsArgs:
     strategy_args: dict[str, dict[str, str]] = field(
         default_factory=lambda: {name: dict() for name in STRATEGY_NAMES.keys()}
     )
-    datasets: list[str] = field(default_factory=lambda: BASE_DATASETS_WITHOUT_ETH3D)
+    datasets: list[str] = field(default_factory=lambda: BASE_DATASETS)
     metrics: list[str] = field(default_factory=lambda: list(PHOTOMETRIC_METRICS))
-    include_sparse_for_laser: bool = True
+    include_sparse_for_laser_scannet: bool = True
     show_scene_labels: bool = True
     show_strategy_title: bool = True
 
@@ -1488,6 +1506,9 @@ def practical_analysis_plots(
 ) -> None:
     """Plot every eval iteration for practical initializations, grouped by scene."""
     del format_options
+
+    def include_sparse_for_laser(dataset: str) -> bool:
+        return cfg.include_sparse_for_laser_scannet and "scannet++" in dataset
 
     method_specs: dict[InitMethodId, tuple[str, dict[str, Any], bool]] = {
         "sfm": ("SfM", {"init_group": "sfm_baseline"}, False),
@@ -1533,7 +1554,6 @@ def practical_analysis_plots(
             {
                 "init_method": "laser_scan",
                 "init_size_matches_real_init": True,
-                "dense_init.include_sparse": cfg.include_sparse_for_laser,
             },
             True,
         ),
@@ -1573,6 +1593,11 @@ def practical_analysis_plots(
                     **({} if method == "sfm" else common_args),
                     "strategy": strategy,
                     **method_args,
+                    **(
+                        {"dense_init.include_sparse": include_sparse_for_laser(dataset)}
+                        if method == "laser_scan"
+                        else {}
+                    ),
                     **strategy_overrides(strategy),
                 }
                 try:
@@ -2285,9 +2310,11 @@ def da3_scene_selection_ablation(
                     for scene_set in scene_set_labels:
                         scene_filter = scene_sets[scene_set]
                         strategy_dfs = [
-                            df
-                            if scene_filter is None
-                            else df.loc[df.index.intersection(scene_filter)]
+                            (
+                                df
+                                if scene_filter is None
+                                else df.loc[df.index.intersection(scene_filter)]
+                            )
                             for df in dfs_per_init[init_label]
                         ]
                         cell = cell_data_across_strategies(metric, strategy_dfs)
