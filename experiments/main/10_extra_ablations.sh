@@ -23,7 +23,7 @@ train_strat_with_sfm "means_lr_init={0.00004} means_lr_final={0.000002}"
 
 for strategy in DefaultWithGaussianCapStrategy MCMCStrategy IDHFRStrategy; do
     train_strat_with_practical_init_method "edgs" \
-                     "$ALL_DATASETS_EXCEPT_ETH3D" \
+                     "$BASE_DATASETS_EXCEPT_ETH3D" \
                      "default" \
                      "splat_init.increase_scale_with_fewer_splats=False"
 done

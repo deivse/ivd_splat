@@ -7,6 +7,17 @@ SCANNETPP_SCENE_SELECTION = (
     "3f15a9266d,5eb31827b7,3db0a1c8f3,40aec5fffa,9071e139d9,"
     "e7af285f7d,bde1e479ad,5748ce6f01,825d228aec,7831862f02"
 ).split(",")
+# TODO: TMP ONLY THOSE THAT ARE ALSO IN DA3 TEST SET
+SCANNETPP_DA3_TEST_SCENE_SELECTION = [
+    "c5439f4607",
+    "bcd2436daf",
+    "f3d64c30f8",
+    "40aec5fffa",
+    "9071e139d9",
+    "bde1e479ad",
+    "7831862f02",
+]
+
 TANKSANDTEMPLES_SCENE_SELECTION = (
     "auditorium,ballroom,palace,temple,family,horse,lighthouse,m60,train,"
     "barn,caterpillar,church,meetingroom,truck"
@@ -105,8 +116,13 @@ LASER_DATASETS_WITHOUT_ETH3D = [
     dataset for dataset in LASER_DATASETS if dataset != "eth3d"
 ]
 OTHER_DATASETS = ["mipnerf360", "tanksandtemples"]
-ALL_DATASETS = LASER_DATASETS + OTHER_DATASETS
-ALL_DATASETS_WITHOUT_ETH3D = [dataset for dataset in ALL_DATASETS if dataset != "eth3d"]
+SPARSIFIED_DATASETS = ["mipnerf360-sparsified", "tanksandtemples-sparsified"]
+BASE_DATASETS = LASER_DATASETS + OTHER_DATASETS
+ALL_DATASETS = BASE_DATASETS + SPARSIFIED_DATASETS
+BASE_DATASETS_WITHOUT_ETH3D = [
+    dataset for dataset in BASE_DATASETS if dataset != "eth3d"
+]
+ALL_DATASETS_WITHOUT_ETH3D = BASE_DATASETS_WITHOUT_ETH3D + SPARSIFIED_DATASETS
 
 DATASET_NAMES = {
     "scannet++": "ScanNet++",
@@ -122,12 +138,14 @@ DEFAULT_TABLE_METRICS = [
     "train/num-gaussians",
     "train/total-train-time",
 ]
+PHOTOMETRIC_METRICS = [f"eval-all-test/{metric}" for metric in ["psnr", "ssim", "lpips"]]
 
 # Metrics for which a lower value is better. Drives both the arrow shown in
 # pretty metric names and the direction of table coloring (so "better" is always
 # the warm end of the color map, regardless of metric direction).
 LOWER_IS_BETTER_METRICS = {
     "eval-all-test/lpips",
+    "eval-all-test/lpips_vgg",
     "train/num-gaussians",
     "train/total-train-time",
 }
@@ -137,6 +155,7 @@ METRIC_BASE_NAMES = {
     "eval-all-test/psnr": "PSNR",
     "eval-all-test/ssim": "SSIM",
     "eval-all-test/lpips": "LPIPS",
+    "eval-all-test/lpips_vgg": "LPIPS (VGG)",
     "train/num-gaussians": "Num Gaussians",
     "train/total-train-time": "Train Time (min)",
     "fscore": "F-Score (\\%)",

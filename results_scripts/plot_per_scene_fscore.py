@@ -59,7 +59,7 @@ def short_scene(scene: str) -> str:
 
 def scene_labels(scenes):
     """First 4 characters of each scene name; errors out if they are not unique."""
-    labels = [short_scene(s)[:4] for s in scenes]
+    labels = [short_scene(s)[:10] for s in scenes]
     if len(set(labels)) != len(labels):
         seen, dupes = set(), set()
         for label in labels:

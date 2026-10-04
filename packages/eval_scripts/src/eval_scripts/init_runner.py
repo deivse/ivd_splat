@@ -113,6 +113,7 @@ def init_method_dir_needs_overwrite(
                     ANSIEscapes.YELLOW,
                 )
                 return True
+        return False
 
     # This is a legacy fallback for existing data before init_info.json was introduced.
     if args.method in required_files:

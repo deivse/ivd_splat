@@ -23,7 +23,7 @@ EXTRA_PRACTICAL_INIT_FRACTIONS="0.5"
 function da3_splat_init() {
     local extra_config=$(prepend_space_if_set "$1")
 
-    train_strat_with_practical_init_method da3 "$ALL_DATASETS_EXCEPT_ETH3D" \
+    train_strat_with_practical_init_method da3 "$BASE_DATASETS_EXCEPT_ETH3D" \
                                            "output_gaussians=True_max_num_images=150" \
                                            "splat_init.increase_scale_with_fewer_splats=False$extra_config"
 }

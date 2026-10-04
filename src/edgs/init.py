@@ -256,7 +256,12 @@ def aggregate_confidences_and_warps(
         imB_compound.append(imB)
 
     certainties_all = torch.stack(certainties_all, dim=0)
-    target_shape = imB_compound[0].shape[:2]
+    # The confidence/warp maps are defined over the reference image domain, so
+    # the reference-frame resolution is the correct common target to resize them
+    # to. Using it (instead of the first neighbour's resolution) makes the code
+    # robust to neighbours that have a different resolution than the reference.
+    reference_image = viewpoint_stack[source_idx].original_image
+    target_shape = (int(reference_image.shape[1]), int(reference_image.shape[2]))
     if verbose:
         print("certainties_all.shape:", certainties_all.shape)
         print(
@@ -395,28 +400,10 @@ def extract_keypoints_and_colors(
     kptsA_y = np.round(kptsA_np[:, 1] / 1.0).astype(int)
     kptsA_color = imA[np.clip(kptsA_x, 0, H - 1), np.clip(kptsA_y, 0, W - 1)]
 
-    # Create a composite image from imB_compound
-    imB_compound_np = np.stack(imB_compound, axis=0)
-    H_B, W_B, _ = imB_compound[0].shape
-
-    # Extract colors for keypoints in imB using certainties_max_idcs
-    imB_np = imB_compound_np[
-        certainties_max_idcs.detach().cpu().numpy(),
-        np.arange(H).reshape(-1, 1),
-        np.arange(W),
-    ]
-
-    if verbose:
-        print("imB_np.shape:", imB_np.shape)
-        print("imB_np:", imB_np)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        cax = ax.imshow(np.flipud(imB_np))
-        cax = ax.scatter(kptsB_np[:, 0], H_A - kptsB_np[:, 1], s=0.03)
-        ax.set_title("np.flipud(imB_np[0]")
-        ax.set_xlim(0, W_A)
-        ax.set_ylim(0, H_A)
-        output_dict[f"np.flipud(imB_np[0]"] = fig
-
+    # Keypoint pixel coordinates in imB are expressed in the reference-frame
+    # resolution (H, W) that to_pixel_coordinates was called with. Neighbour
+    # images may have a different resolution, so colours are looked up per
+    # neighbour with the appropriate coordinate rescaling (see below).
     kptsB_x = np.round(kptsB_np[:, 0]).astype(int)
     kptsB_y = np.round(kptsB_np[:, 1]).astype(int)
 
@@ -424,15 +411,50 @@ def extract_keypoints_and_colors(
     kptsB_proj_matrices_idx = certainties_max_idcs_np[
         np.clip(kptsA_x, 0, H - 1), np.clip(kptsA_y, 0, W - 1)
     ]
-    kptsB_color = imB_compound_np[
-        kptsB_proj_matrices_idx, np.clip(kptsB_y, 0, H - 1), np.clip(kptsB_x, 0, W - 1)
-    ]
 
-    # Normalize keypoints in both images
+    if verbose:
+        # The composite visualization only works when every neighbour shares the
+        # reference resolution; guard it so differing sizes don't crash np.stack.
+        if all(img.shape[:2] == (H, W) for img in imB_compound):
+            imB_compound_np = np.stack(imB_compound, axis=0)
+            imB_np = imB_compound_np[
+                certainties_max_idcs_np,
+                np.arange(H).reshape(-1, 1),
+                np.arange(W),
+            ]
+            print("imB_np.shape:", imB_np.shape)
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.imshow(np.flipud(imB_np))
+            ax.scatter(kptsB_np[:, 0], H_A - kptsB_np[:, 1], s=0.03)
+            ax.set_title("np.flipud(imB_np[0]")
+            ax.set_xlim(0, W_A)
+            ax.set_ylim(0, H_A)
+            output_dict["np.flipud(imB_np[0]"] = fig
+
+    # Look up keypoint colours in each neighbour image individually. Coordinates
+    # are rescaled from the reference resolution (H, W) to each neighbour's own
+    # resolution so neighbours of differing size are handled correctly.
+    num_channels = imB_compound[0].shape[2]
+    kptsB_color = np.zeros(
+        (kptsB_np.shape[0], num_channels), dtype=imB_compound[0].dtype
+    )
+    for neighbour_idx in np.unique(kptsB_proj_matrices_idx):
+        selection = kptsB_proj_matrices_idx == neighbour_idx
+        H_B, W_B = imB_compound[neighbour_idx].shape[:2]
+        neighbour_x = np.clip(
+            np.round(kptsB_x[selection] * (W_B / W)).astype(int), 0, W_B - 1
+        )
+        neighbour_y = np.clip(
+            np.round(kptsB_y[selection] * (H_B / H)).astype(int), 0, H_B - 1
+        )
+        kptsB_color[selection] = imB_compound[neighbour_idx][neighbour_y, neighbour_x]
+
+    # Normalize keypoints in both images. imB coordinates are expressed in the
+    # reference resolution (H, W), so they are normalised by (W, H) as well.
     kptsA_np[:, 0] = kptsA_np[:, 0] / H * 2.0 - 1.0
     kptsA_np[:, 1] = kptsA_np[:, 1] / W * 2.0 - 1.0
-    kptsB_np[:, 0] = kptsB_np[:, 0] / W_B * 2.0 - 1.0
-    kptsB_np[:, 1] = kptsB_np[:, 1] / H_B * 2.0 - 1.0
+    kptsB_np[:, 0] = kptsB_np[:, 0] / W * 2.0 - 1.0
+    kptsB_np[:, 1] = kptsB_np[:, 1] / H * 2.0 - 1.0
 
     return (
         kptsA_np[:, [1, 0]],

@@ -1,3 +1,22 @@
+"""
+Shared helpers for the two-stage final-reconstruction accuracy evaluation.
+
+The evaluation is split into two stages that run as separate scripts:
+
+- ``eval_final_recon_accuracy_gpu.py`` (GPU stage): renders each trained /
+  init reconstruction and fuses depths into a TSDF, producing comparable point
+  sets. These reconstructions (and the processed laser-scan reference) are
+  written to an intermediate directory together with a ``manifest.json``.
+- ``eval_final_recon_accuracy_cpu.py`` (CPU stage): loads the saved
+  reconstructions from the intermediate directory and computes the geometry
+  metrics (KD-tree F-score, or the external ETH3D tool), writing the metrics
+  JSON and the LaTeX table.
+
+This module holds everything both stages share: the point-processing / TSDF
+fusion path, the metrics, the LaTeX table rendering, and the on-disk
+intermediate format (PLY reconstructions + ``manifest.json``).
+"""
+
 from __future__ import annotations
 
 import copy
@@ -10,16 +29,15 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Protocol
 
 import numpy as np
 import open3d as o3d
 import open3d.core as o3c
 from results_scripts.constants import STRATEGY_NAMES
 import torch
-import tyro
 from torch import Tensor
 from torch.utils.dlpack import to_dlpack
 from scipy.spatial import cKDTree
@@ -28,7 +46,6 @@ from nerfbaselines.datasets import load_dataset
 from nerfbaselines.utils import pad_poses
 
 from eval_scripts.common.dataset_scenes import (
-    get_scenes_from_args,
     scene_id_to_nerfbaselines_data_value,
 )
 from eval_scripts.common.results_dir import ResultsDirectory
@@ -82,11 +99,11 @@ def _default_device() -> torch.device:
 
 # Max CPU workers/threads for parallel CPU-bound ops (KD-tree queries, Open3D,
 # torch CPU ops). -1 follows the SciPy KD-tree convention of "use all cores";
-# overridden by --max-cpu-threads via ``_apply_cpu_thread_limit``.
+# overridden by --max-cpu-threads via ``apply_cpu_thread_limit``.
 _CPU_WORKERS = -1
 
 
-def _apply_cpu_thread_limit(max_threads: int | None) -> None:
+def apply_cpu_thread_limit(max_threads: int | None) -> None:
     """
     Limit the number of CPU threads / parallel workers used for CPU-bound work:
     torch CPU intra-op threads, Open3D's parallel ops (TSDF integrate/extract),
@@ -126,6 +143,57 @@ AT_INIT_ROW_LABEL = "At Init"
 # path (relative to the archive root) of the final trained splat PLY within it.
 TRAINED_OUTPUT_ARCHIVE_NAME = "output.zip"
 TRAINED_SPLATS_ARCHIVE_MEMBER = "checkpoint/splats_30000.ply"
+
+# Intermediate (GPU-stage output) layout: the manifest describing every
+# reconstruction and the per-scene laser-scan reference file name.
+MANIFEST_FILENAME = "manifest.json"
+REFERENCE_FILENAME = "reference.ply"
+
+
+class GpuStageArgs(Protocol):
+    """
+    Structural type of the GPU-stage ``Args`` consumed by the shared run
+    resolution / geometry helpers. Declared as a Protocol so this module does
+    not need to import the concrete ``Args`` dataclass (avoiding a circular
+    import).
+
+    The members are read-only properties so the match is covariant: a concrete
+    ``Args`` may narrow an attribute (e.g. ``tsdf_backend: Literal["gpu",
+    "cpu"]`` vs ``str``) and still satisfy the protocol.
+    """
+
+    @property
+    def results_dir(self) -> Path: ...
+    @property
+    def gaussian_cap_per_scene_file(self) -> str | None: ...
+    @property
+    def gaussian_cap_fraction(self) -> float: ...
+    @property
+    def init_size_per_scene_file(self) -> str | None: ...
+    @property
+    def extra_tags(self) -> list[str]: ...
+    @property
+    def eval_iter(self) -> int: ...
+    @property
+    def voxel_size(self) -> float: ...
+    @property
+    def near_plane(self) -> float: ...
+    @property
+    def far_plane(self) -> float: ...
+    @property
+    def tsdf_sdf_trunc_voxel_multiplier(self) -> float: ...
+    @property
+    def min_render_alpha(self) -> float: ...
+    @property
+    def tsdf_backend(self) -> str: ...
+    @property
+    def render_downscale(self) -> int: ...
+    @property
+    def tsdf_block_count(self) -> int: ...
+    @property
+    def init_transform_check_threshold_meters(self) -> float: ...
+    @property
+    def init_transform_fatal_threshold_meters(self) -> float: ...
 
 
 @dataclass
@@ -174,139 +242,17 @@ def parse_init_method(spec: str) -> tuple[str, str]:
     return init_method, init_method_config
 
 
-@dataclass
-class Args:
-    # One column per entry, each "init_method=init_method_config" (the config may
-    # itself contain '='). These are the columns of the output table, e.g.
-    #   --init-methods da3=max_num_images=30 laser_scan=default sfm=default
-    # Required unless --load-existing is set.
-    init_methods: list[str] = field(default_factory=list)
-
-    # ivd-splat training config strings (rows of the table, i.e. densification
-    # strategies), exactly as accepted by `ivd_splat_runner --configs`.
-    # Shared across all columns, optionally with a per-init-method suffix (see
-    # --ivd-splat-config-suffix).
-    ivd_splat_configs: list[str] = field(default_factory=lambda: [""])
-
-    # Optional per-init-method suffix appended to every --ivd-splat-configs entry
-    # for that init method, keyed by the exact --init-methods spec. Example:
-    #   --ivd-splat-configs-suffix da3=default "increase_scale_with_fewer_splats=False"
-    # makes the da3=default column use, for each base config string,
-    #   f"{base_config_string} increase_scale_with_fewer_splats=False".
-    ivd_splat_configs_suffix: dict[str, str] = field(default_factory=dict)
-
-    # Scenes to evaluate, in "dataset/scene" form or as local paths.
-    # Takes precedence over --dataset when non-empty.
-    scenes: list[str] = field(default_factory=list)
-    # Dataset to expand into scenes when --scenes is not given.
-    dataset: str | None = "scannet++"
-
-    # Base results directory containing the trained method outputs.
-    results_dir: Path = Path("results")
-
-    # Directory to use for temporary files (trained-output archive extraction).
-    # When set, temporary directories are created here instead of the system
-    # default (``$TMPDIR`` / ``/tmp``). Useful on clusters where the default temp
-    # location is a slow/network filesystem; point this at fast local scratch.
-    temp_dir_override: Path | None = None
-
-    # Maximum number of CPU threads / parallel workers to use for CPU-bound work
-    # (KD-tree nearest-neighbour queries, Open3D TSDF integration/extraction, and
-    # torch CPU ops). When None, all available cores are used. Set this to avoid
-    # oversubscribing shared cluster nodes.
-    max_cpu_threads: int | None = None
-
-    # External data needed to reproduce trained output directory names 1:1 with
-    # ivd_splat_runner (must match what was passed at training time).
-    gaussian_cap_per_scene_file: str | None = None
-    gaussian_cap_fraction: float = 1.0
-    init_size_per_scene_file: str | None = None
-    extra_tags: list[str] = field(default_factory=list)
-    eval_iter: int = 0
-
-    # Voxel size for point merging, in meters (world / laser-scan frame). Also
-    # used as the TSDF voxel length and the laser-scan downsample voxel size
-    # (both grids are origin-aligned).
-    voxel_size: float = DEFAULT_VOXEL_SIZE
-
-    # gsplat depth-render near/far planes, in meters (world / laser-scan frame).
-    # far_plane also acts as the TSDF depth truncation.
-    near_plane: float = 0.01
-    far_plane: float = 100.0
-    # TSDF signed-distance truncation as a multiple of the voxel size.
-    tsdf_sdf_trunc_voxel_multiplier: float = 3.0
-    # Minimum accumulated splat alpha for a rendered depth pixel to be fused.
-    min_render_alpha: float = 0.5
-    # TSDF fusion backend.
-    #
-    # "gpu" uses Open3D's CUDA tensor VoxelBlockGrid (needs a CUDA device and a
-    # few GB of spare VRAM; auto-falls back to "cpu" when none is available).
-    # Its metrics differ slightly from "cpu".
-    #
-    # "cpu" (default) uses Open3D's multithreaded ScalableTSDFVolume.
-    tsdf_backend: Literal["gpu", "cpu"] = "cpu"
-
-    # Number of 16^3 voxel blocks the GPU VoxelBlockGrid pre-allocates (~80 KB
-    # each). Must exceed the number of occupied blocks in a scene or Open3D spams
-    # "stdgpu::vector::size ... out of bounds" warnings and drops geometry. Raise
-    # on large-memory GPUs (300k ~= 24 GB), lower on smaller ones. Only used by
-    # the "gpu" backend.
-    tsdf_block_count: int = DEFAULT_TSDF_BLOCK_COUNT
-
-    # Integer factor by which to downscale the rendered (and TSDF-integrated)
-    # images. 1 (default) renders at full dataset resolution; e.g. 4 renders at
-    # 1/4 the width and height (~16x fewer pixels), which speeds up rendering and
-    # TSDF integration at the cost of geometric detail. Intrinsics are scaled
-    # accordingly.
-    render_downscale: int = 1
-
-    # Enable debug-level logging (e.g. per-scene camera render resolutions).
-    debug: bool = False
-
-    # F-score inlier distance threshold, in meters (on the GT / laser-scan
-    # scale). A reconstruction/GT point counts as matched when its nearest
-    # neighbour in the other cloud is within this distance.
-    fscore_threshold_meters: float = 0.05
-
-    # For monodepth / da3 (point-cloud) trained runs, both the SfM-derived and
-    # an init-point-derived normalization transform are tried and the better
-    # aligned one is used. This is the acceptable median init-alignment distance
-    # (meters): if neither transform aligns within it and the two are too close
-    # to distinguish, resolve_world_frame_splats raises.
-    init_transform_check_threshold_meters: float = 0.05
-    init_transform_fatal_threshold_meters: float = 0.1
-
-    # Output JSON file for per-scene and aggregated metrics.
-    output: Path = Path("final_recon_accuracy.json")
-
-    # Skip all recomputation and instead load previously computed metrics from
-    # the --output JSON file, then (re)write the LaTeX table from them. Useful to
-    # re-render the table with different --latex-metrics / --latex-output without
-    # rerunning the (expensive) geometry evaluation.
-    load_existing: bool = False
-
-    # Colored LaTeX F-score table output (rows = densification strategies,
-    # columns = init methods), rendered with the results_scripts table helpers.
-    # Defaults to the JSON output path with a ``.tex`` suffix.
-    latex_output: Path | None = None
-    # Which computed metric(s) to tabulate. All requested metrics are shown in a
-    # single cell separated by '/', in this order (e.g. "F-Score / Precision /
-    # Recall"), and cells are colored by the first metric. Defaults to F-score,
-    # precision and recall; pass e.g. ``--latex-metrics fscore`` for F-score only.
-    latex_metrics: list[str] = field(
-        default_factory=lambda: ["fscore", "precision", "recall"]
-    )
-
-    debug_export_dir: Path | None = None
-
-
-def build_columns(args: Args) -> list[InitMethodColumn]:
+def build_columns(
+    init_methods: list[str],
+    ivd_splat_configs: list[str],
+    ivd_splat_configs_suffix: dict[str, str],
+) -> list[InitMethodColumn]:
     """
-    Build the table columns from --init-methods, appending the optional
-    per-init-method --ivd-splat-config-suffix to each shared --ivd-splat-configs
-    entry.
+    Build the table columns from ``init_methods``, appending the optional
+    per-init-method ``ivd_splat_configs_suffix`` to each shared
+    ``ivd_splat_configs`` entry.
     """
-    unknown = set(args.ivd_splat_configs_suffix) - set(args.init_methods)
+    unknown = set(ivd_splat_configs_suffix) - set(init_methods)
     if unknown:
         raise ValueError(
             "--ivd-splat-config-suffix keys must match --init-methods entries "
@@ -314,12 +260,12 @@ def build_columns(args: Args) -> list[InitMethodColumn]:
         )
 
     columns: list[InitMethodColumn] = []
-    for spec in args.init_methods:
+    for spec in init_methods:
         init_method, init_method_config = parse_init_method(spec)
-        suffix = args.ivd_splat_configs_suffix.get(spec, "")
+        suffix = ivd_splat_configs_suffix.get(spec, "")
         training_configs = [
             (base, f"{base} {suffix}".strip() if suffix else base)
-            for base in args.ivd_splat_configs
+            for base in ivd_splat_configs
         ]
         columns.append(
             InitMethodColumn(
@@ -331,7 +277,9 @@ def build_columns(args: Args) -> list[InitMethodColumn]:
     return columns
 
 
-def _runner_args_for_column(column: InitMethodColumn, args: Args) -> IVDRunnerArguments:
+def _runner_args_for_column(
+    column: InitMethodColumn, args: GpuStageArgs
+) -> IVDRunnerArguments:
     """
     Construct the ivd_splat_runner arguments that reproduce the trained output
     directory names for a given column, mirroring how the runner was invoked.
@@ -368,7 +316,7 @@ class ResolvedRun:
 
 
 def resolve_runs_for_scene(
-    scene: str, columns: list[InitMethodColumn], args: Args
+    scene: str, columns: list[InitMethodColumn], args: GpuStageArgs
 ) -> list[ResolvedRun]:
     """
     Resolve the trained output directories for every (column, strategy) cell of a
@@ -606,6 +554,16 @@ class SceneGeometryInputs:
     # 4x4 world -> normalized-frame transform (the frame the trained splats live
     # in); its inverse maps splats back into the world frame.
     transform: np.ndarray
+    # For ETH3D scenes: path to the scene's MeshLab project (``scan_alignment.mlp``)
+    # defining the ground-truth laser-scan poses, used by the official
+    # ETH3DMultiViewEvaluation tool. ``None`` for non-ETH3D datasets.
+    eth3d_meshlab_project_path: Path | None = None
+
+    @property
+    def is_eth3d(self) -> bool:
+        """Whether this scene is scored by the external ETH3D tool (vs the
+        in-house F-score against the processed laser scan)."""
+        return self.eth3d_meshlab_project_path is not None
 
 
 def compute_normalization_transform(
@@ -665,6 +623,8 @@ def load_scene_geometry_inputs(scene: str) -> SceneGeometryInputs:
     # load_pointcloud_ply already returns colors in the [0, 1] range (or None).
     colors = np.asarray(rgbs, dtype=np.float64) if rgbs is not None else None
 
+    eth3d_mlp = dataset["metadata"].get("eth3d_meshlab_project_path")
+
     return SceneGeometryInputs(
         laser_points_world=np.asarray(points, dtype=np.float64),
         laser_colors=colors,
@@ -672,6 +632,7 @@ def load_scene_geometry_inputs(scene: str) -> SceneGeometryInputs:
         sfm_colors=sfm_colors,
         cameras=cameras,
         transform=transform,
+        eth3d_meshlab_project_path=Path(eth3d_mlp) if eth3d_mlp is not None else None,
     )
 
 
@@ -681,7 +642,7 @@ def _sanitize_for_path(name: str) -> str:
 
 
 def _write_point_set_ply(out_path: Path, point_set: PointSet) -> None:
-    """Write a point set to a PLY file (for debugging)."""
+    """Write a point set to a PLY file (for debugging / intermediate storage)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(point_set.points)
@@ -689,10 +650,33 @@ def _write_point_set_ply(out_path: Path, point_set: PointSet) -> None:
         pcd.colors = o3d.utility.Vector3dVector(point_set.colors)
     o3d.io.write_point_cloud(str(out_path), pcd)
     _LOGGER.info(
-        "Exported debug point set (%d points) to %s",
+        "Exported point set (%d points) to %s",
         point_set.points.shape[0],
         out_path,
     )
+
+
+def read_point_set_ply(path: Path) -> PointSet:
+    """Load a ``PointSet`` previously written with ``_write_point_set_ply``."""
+    pcd = o3d.io.read_point_cloud(str(path))
+    points = np.asarray(pcd.points, dtype=np.float64)
+    colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    if colors is not None and colors.size == 0:
+        colors = None
+    return PointSet(points=points, colors=colors)
+
+
+def save_reconstruction_ply(path: Path, point_set: PointSet) -> bool:
+    """
+    Save a reconstruction ``PointSet`` to ``path`` (PLY). Empty point sets are
+    not written (Open3D cannot round-trip a zero-point cloud); returns whether a
+    file was written.
+    """
+    if point_set.points.shape[0] == 0:
+        _LOGGER.warning("Not saving empty reconstruction to %s.", path)
+        return False
+    _write_point_set_ply(path, point_set)
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -886,6 +870,17 @@ def _splat_render_inputs(
     return means, quats, scales, opacities, sh_coeffs, sh_degree
 
 
+# Substring of the Open3D error raised when TSDF fusion produces no geometry
+# (e.g. no rendered depth passes the alpha threshold in any camera), so the
+# VoxelBlockGrid ends up with zero occupied blocks / hashmap keys.
+_EMPTY_TSDF_ERROR_SUBSTR = "Input number of keys should > 0"
+
+
+def _is_empty_tsdf_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is the Open3D error signalling an empty TSDF volume."""
+    return _EMPTY_TSDF_ERROR_SUBSTR in str(exc)
+
+
 def process_splats_via_tsdf(
     splats: SplatData,
     cameras: Cameras,
@@ -1055,47 +1050,57 @@ def process_splats_via_tsdf(
         render_seconds += time.perf_counter() - render_start
 
         integrate_start = time.perf_counter()
-        if use_gpu:
-            intrinsic = o3c.Tensor(K, dtype=o3c.float64, device=o3c.Device("CPU:0"))
-            extrinsic = o3c.Tensor(
-                viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
+        try:
+            if use_gpu:
+                intrinsic = o3c.Tensor(K, dtype=o3c.float64, device=o3c.Device("CPU:0"))
+                extrinsic = o3c.Tensor(
+                    viewmat, dtype=o3c.float64, device=o3c.Device("CPU:0")
+                )
+                frustum_blocks = vbg.compute_unique_block_coordinates(
+                    depth_img,
+                    intrinsic,
+                    extrinsic,
+                    depth_scale=1.0,
+                    depth_max=far_plane,
+                    trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+                )
+                vbg.integrate(
+                    frustum_blocks,
+                    depth_img,
+                    color_img,
+                    intrinsic,
+                    extrinsic,
+                    depth_scale=1.0,
+                    depth_max=far_plane,
+                    trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
+                )
+            else:
+                rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                    o3d.geometry.Image(color_np),
+                    o3d.geometry.Image(depth_np),
+                    depth_scale=1.0,
+                    depth_trunc=far_plane,
+                    convert_rgb_to_intensity=False,
+                )
+                intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                    width,
+                    height,
+                    K[0, 0],
+                    K[1, 1],
+                    K[0, 2],
+                    K[1, 2],
+                )
+                volume.integrate(rgbd, intrinsic, viewmat)
+            integrate_seconds += time.perf_counter() - integrate_start
+        except Exception as exc:
+            _LOGGER.error(
+                "TSDF INTEGRATION FAILED (CONTINUING) for camera %d (viewmat %s, K %s): %s",
+                cam_idx,
+                viewmat,
+                K,
+                exc,
             )
-            frustum_blocks = vbg.compute_unique_block_coordinates(
-                depth_img,
-                intrinsic,
-                extrinsic,
-                depth_scale=1.0,
-                depth_max=far_plane,
-                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
-            )
-            vbg.integrate(
-                frustum_blocks,
-                depth_img,
-                color_img,
-                intrinsic,
-                extrinsic,
-                depth_scale=1.0,
-                depth_max=far_plane,
-                trunc_voxel_multiplier=sdf_trunc_voxel_multiplier,
-            )
-        else:
-            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                o3d.geometry.Image(color_np),
-                o3d.geometry.Image(depth_np),
-                depth_scale=1.0,
-                depth_trunc=far_plane,
-                convert_rgb_to_intensity=False,
-            )
-            intrinsic = o3d.camera.PinholeCameraIntrinsic(
-                width,
-                height,
-                K[0, 0],
-                K[1, 1],
-                K[0, 2],
-                K[1, 2],
-            )
-            volume.integrate(rgbd, intrinsic, viewmat)
-        integrate_seconds += time.perf_counter() - integrate_start
+            continue
 
     extract_start = time.perf_counter()
     if use_gpu:
@@ -1182,12 +1187,33 @@ def _process_point_cloud_reconstruction(
     voxel_size: float,
     debug_export_dir: Path | None = None,
     debug_prefix: str = "init",
+    skip_processing: bool = False,
 ) -> PointSet:
     """
     Make a point-cloud reconstruction comparable to the processed laser scan:
     voxel-downsample on the origin-aligned grid and keep only points visible in
     at least one training camera (same processing as the laser-scan reference).
+
+    When ``skip_processing`` is set (ETH3D mode), the points are passed through
+    unchanged: the external ETH3D tool does its own downsampling / filtering, so
+    it must receive the exact init points.
     """
+    if skip_processing:
+        result = PointSet(
+            points=np.asarray(point_set.points, dtype=np.float64),
+            colors=point_set.colors,
+        )
+        _LOGGER.info(
+            "Init point cloud '%s': %d points (raw, no downsample/visibility filter)",
+            debug_prefix,
+            result.points.shape[0],
+        )
+        if debug_export_dir is not None:
+            _write_point_set_ply(
+                debug_export_dir / f"{debug_prefix}_visible.ply", result
+            )
+        return result
+
     down_points, down_colors = voxel_downsample_aligned(
         np.asarray(point_set.points, dtype=np.float64), point_set.colors, voxel_size
     )
@@ -1210,7 +1236,7 @@ def _process_point_cloud_reconstruction(
 def build_init_reconstruction(
     column: InitMethodColumn,
     scene: str,
-    args: Args,
+    args: GpuStageArgs,
     geometry: SceneGeometryInputs,
     device: torch.device,
     debug_export_dir: Path | None = None,
@@ -1235,6 +1261,8 @@ def build_init_reconstruction(
     """
     prefix = _sanitize_for_path(f"init__{column.label}")
 
+    skip_processing = geometry.is_eth3d
+
     if column.init_method == "sfm":
         return _process_point_cloud_reconstruction(
             PointSet(geometry.sfm_points_world, geometry.sfm_colors),
@@ -1242,6 +1270,7 @@ def build_init_reconstruction(
             args.voxel_size,
             debug_export_dir,
             prefix,
+            skip_processing=skip_processing,
         )
     if column.init_method == "laser_scan":
         return _process_point_cloud_reconstruction(
@@ -1250,6 +1279,7 @@ def build_init_reconstruction(
             args.voxel_size,
             debug_export_dir,
             prefix,
+            skip_processing=skip_processing,
         )
 
     init_dir = ResultsDirectory(args.results_dir).get_init_method_output_dir(
@@ -1283,6 +1313,7 @@ def build_init_reconstruction(
                 args.voxel_size,
                 debug_export_dir,
                 prefix,
+                skip_processing=skip_processing,
             )
         raise NotImplementedError(
             f"Init method '{column.init_method}' with splat init type is not supported."
@@ -1296,6 +1327,7 @@ def build_init_reconstruction(
         args.voxel_size,
         debug_export_dir,
         prefix,
+        skip_processing=skip_processing,
     )
 
 
@@ -1317,7 +1349,7 @@ _INIT_TRANSFORM_AMBIGUOUS_RATIO = 1.5
 
 
 def _load_init_world_points(
-    column: InitMethodColumn, scene: str, args: Args
+    column: InitMethodColumn, scene: str, args: GpuStageArgs
 ) -> np.ndarray | None:
     """
     Load the raw world-frame point cloud output by a point-cloud init method
@@ -1364,7 +1396,7 @@ def resolve_world_frame_splats(
     splats: SplatData,
     column: InitMethodColumn,
     scene: str,
-    args: Args,
+    args: GpuStageArgs,
     geometry: SceneGeometryInputs,
 ) -> SplatData:
     """
@@ -1528,6 +1560,130 @@ def compute_fscore_metrics(
     }
 
 
+# Name of the official ETH3D multi-view evaluation binary (assumed to be on PATH).
+ETH3D_EVAL_BINARY = "ETH3DMultiViewEvaluation"
+
+
+def _parse_eth3d_metric_line(stdout: str, prefix: str) -> list[float]:
+    """
+    Parse a whitespace-separated list of floats from the ETH3D evaluation output
+    line starting with ``prefix`` (e.g. ``"Accuracies:"``). One value per
+    requested tolerance is emitted, in tolerance order.
+    """
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            values = [float(v) for v in line[len(prefix) :].split()]
+            if not values:
+                break
+            return values
+    raise ValueError(
+        f"Could not parse '{prefix}' from ETH3DMultiViewEvaluation output:\n{stdout}"
+    )
+
+
+def compute_eth3d_metrics(
+    reconstruction: PointSet,
+    meshlab_project_path: Path,
+    threshold_meters: float,
+    temp_dir_override: Path | None = None,
+) -> dict:
+    """
+    Compute geometry metrics for an ETH3D scene using the official
+    ``ETH3DMultiViewEvaluation`` tool instead of the in-house KD-tree F-score.
+
+    The reconstruction points (already in the world / laser-scan frame) are
+    written to a temporary PLY and scored against the ground-truth laser scans
+    referenced by ``meshlab_project_path`` (the scene's ``scan_alignment.mlp``),
+    at a single tolerance of ``threshold_meters``. The tool's ``Accuracies``
+    (precision), ``Completenesses`` (recall) and ``F1-scores`` outputs are parsed
+    and returned in the same shape as ``compute_fscore_metrics``.
+    """
+    if temp_dir_override is not None:
+        temp_dir_override.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(dir=temp_dir_override) as tmp_dir:
+        recon_ply = Path(tmp_dir) / "reconstruction.ply"
+        _write_point_set_ply(recon_ply, reconstruction)
+
+        cmd = [
+            ETH3D_EVAL_BINARY,
+            "--reconstruction_ply_path",
+            str(recon_ply),
+            "--ground_truth_mlp_path",
+            str(meshlab_project_path),
+            "--tolerances",
+            f"{threshold_meters:g}",
+        ]
+        _LOGGER.info("Running ETH3D evaluation: %s", " ".join(cmd))
+        eval_start = time.perf_counter()
+        try:
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            _LOGGER.error(
+                "ETH3DMultiViewEvaluation failed (exit %s).\nstdout:\n%s\nstderr:\n%s",
+                exc.returncode,
+                (exc.stdout or "").rstrip(),
+                (exc.stderr or "").rstrip(),
+            )
+            raise
+        _LOGGER.info(
+            "ETH3D evaluation (%d recon points) finished in %.1fs",
+            reconstruction.points.shape[0],
+            time.perf_counter() - eval_start,
+        )
+
+    _LOGGER.info(
+        "Raw ETH3DMultiViewEvaluation output:\n%s",
+        "\n".join(f"> {line}" for line in proc.stdout.rstrip().splitlines()),
+    )
+
+    precision = _parse_eth3d_metric_line(proc.stdout, "Accuracies:")[0]
+    recall = _parse_eth3d_metric_line(proc.stdout, "Completenesses:")[0]
+    fscore = _parse_eth3d_metric_line(proc.stdout, "F1-scores:")[0]
+
+    _LOGGER.info(
+        "Parsed ETH3D metrics (tol=%.3f m): precision=%.4f recall=%.4f fscore=%.4f",
+        threshold_meters,
+        precision,
+        recall,
+        fscore,
+    )
+
+    return {
+        "threshold_meters": threshold_meters,
+        "precision": precision,
+        "recall": recall,
+        "fscore": fscore,
+        "num_reconstruction_points": int(reconstruction.points.shape[0]),
+    }
+
+
+def compute_reconstruction_metrics(
+    reconstruction: PointSet,
+    reference: PointSet | None,
+    eth3d_meshlab_project_path: Path | None,
+    fscore_threshold_meters: float,
+    temp_dir_override: Path | None = None,
+) -> dict:
+    """
+    Compute geometry metrics for one reconstruction, dispatching by dataset:
+    ETH3D scenes use the official ``ETH3DMultiViewEvaluation`` tool (via the
+    scene's MeshLab project), everything else uses the in-house KD-tree F-score
+    against the processed laser-scan ``reference``.
+    """
+    if eth3d_meshlab_project_path is not None:
+        return compute_eth3d_metrics(
+            reconstruction,
+            eth3d_meshlab_project_path,
+            fscore_threshold_meters,
+            temp_dir_override,
+        )
+    if reference is None:
+        raise ValueError("A laser-scan reference is required for non-ETH3D scenes.")
+    return compute_fscore_metrics(reconstruction, reference, fscore_threshold_meters)
+
+
 def _latex_escape_label(text: str) -> str:
     """Escape LaTeX special characters so config-string labels compile as text."""
     replacements = {
@@ -1586,6 +1742,7 @@ def write_metrics_latex_table(
     out_path: Path,
     caption: str,
     label: str,
+    scene_list: list[str] | None = None,
 ) -> None:
     """
     Render the computed metrics as a single colored LaTeX table: one row per
@@ -1594,8 +1751,10 @@ def write_metrics_latex_table(
     / Recall``), and is colored by the *first* requested metric.
 
     Each metric is aggregated over scenes (mean across scenes); cells with no
-    available run become ``NaN`` and render as ``--``. Percentage metrics are
-    scaled by 100.
+    available run become ``NaN`` and render as ``--``. Cells that cover fewer
+    scenes than the best-covered cell (i.e. a scene failed or is missing) are
+    blanked rather than reporting a mean over a smaller denominator. Percentage
+    metrics are scaled by 100.
     """
     import pandas as pd
     from results_scripts.constants import (
@@ -1603,6 +1762,10 @@ def write_metrics_latex_table(
         TABLE_ROUNDING_PER_METRIC,
     )
     from results_scripts.formatting import FormatOptions
+    from results_scripts.statistics import (
+        friedman_holm_improvements_over_control,
+    )
+    from results_scripts.utils import print_friedman_summary
     from results_scripts.tables import (
         VALUE_CMAP,
         tabular_colored_from_numeric_with_custom_text,
@@ -1613,6 +1776,19 @@ def write_metrics_latex_table(
         raise ValueError("At least one metric is required for the LaTeX table.")
 
     scenes = sorted(resolved_runs.keys())
+
+    def scene_name_from_full_id(scene: str) -> str:
+        _, name = scene.split("/", 1)
+        return name
+
+    if scene_list is not None:
+        scenes = [s for s in scenes if scene_name_from_full_id(s) in scene_list]
+        missing = set(scene_list) - {scene_name_from_full_id(s) for s in scenes}
+        if missing:
+            _LOGGER.warning(
+                "Some requested scenes are missing from the resolved runs: %s",
+                ", ".join(sorted(missing)),
+            )
 
     # Discover the (strategy row, init-method column) grid in first-seen order.
     strategies_raw: list[str] = []
@@ -1644,6 +1820,90 @@ def write_metrics_latex_table(
                     break
         return float(np.mean(values)) if values else float("nan")
 
+    def cell_scene_count(strategy: str, column: str) -> int:
+        """Number of scenes containing every requested metric for this cell."""
+        count = 0
+        for scene in scenes:
+            for entry in resolved_runs[scene]:
+                if entry["strategy"] == strategy and entry["column"] == column:
+                    metrics = entry.get("metrics")
+                    if metrics is not None and all(
+                        metrics.get(metric) is not None for metric in metric_keys
+                    ):
+                        count += 1
+                    break
+        return count
+
+    def metric_by_scene(strategy: str, column: str, metric: str) -> pd.Series:
+        """Raw metric values indexed by scene for one reconstruction-table cell."""
+        values: dict[str, float] = {}
+        for scene in scenes:
+            for entry in resolved_runs[scene]:
+                if entry["strategy"] == strategy and entry["column"] == column:
+                    entry_metrics = entry.get("metrics")
+                    value = entry_metrics.get(metric) if entry_metrics else None
+                    if value is not None:
+                        values[scene] = float(value)
+                    break
+        return pd.Series(values, dtype=float)
+
+    # A fully-covered cell aggregates over every evaluated scene. Any cell with
+    # fewer scenes (a scene failed / is missing) would silently average over a
+    # smaller denominator, so it is blanked instead of reporting a partial mean.
+    cell_counts = {
+        (strategy, column): cell_scene_count(strategy, column)
+        for strategy in strategies_raw
+        for column in columns_raw
+    }
+    max_scene_count = max(cell_counts.values(), default=0)
+
+    sfm_columns = [column for column in columns_raw if column.startswith("sfm=")]
+    significant_cells: set[tuple[str, str, str]] = set()
+    if len(sfm_columns) == 1:
+        sfm_column = sfm_columns[0]
+        friedman_records: list[tuple[str, str, str, float | None]] = []
+        for strategy in strategies_raw:
+            if strategy == AT_INIT_ROW_LABEL:
+                continue
+            # Compare the SfM control against every fully-covered init column for
+            # this strategy (Friedman needs a consistent set of methods).
+            eligible = [
+                column
+                for column in columns_raw
+                if column == sfm_column
+                or cell_counts[(strategy, column)] >= max_scene_count
+            ]
+            if sfm_column not in eligible or len(eligible) < 2:
+                continue
+            for metric in metric_keys:
+                per_method = {
+                    column: metric_by_scene(strategy, column, metric)
+                    for column in eligible
+                }
+                friedman, significant = friedman_holm_improvements_over_control(
+                    per_method,
+                    control=sfm_column,
+                    lower_is_better=metric in LOWER_IS_BETTER_METRICS,
+                    alpha=0.05,
+                )
+                friedman_records.append(
+                    (
+                        "",
+                        _latex_format_row_label(strategy),
+                        metric,
+                        friedman.p_value if friedman is not None else None,
+                    )
+                )
+                significant_cells.update(
+                    (metric, strategy, column) for column in significant
+                )
+        print_friedman_summary(friedman_records)
+    elif sfm_columns:
+        _LOGGER.warning(
+            "Skipping significance markers: expected exactly one SfM column, found %s.",
+            sfm_columns,
+        )
+
     row_labels = [_latex_format_row_label(s) for s in strategies_raw]
     col_labels = [_latex_format_col_label(c) for c in columns_raw]
 
@@ -1653,6 +1913,19 @@ def write_metrics_latex_table(
 
     for strategy, row_label in zip(strategies_raw, row_labels):
         for column, col_label in zip(columns_raw, col_labels):
+            count = cell_counts[(strategy, column)]
+            if count < max_scene_count:
+                _LOGGER.warning(
+                    "Blanking table cell [row=%s, col=%s]: only %d/%d scenes "
+                    "have all requested metrics.",
+                    strategy,
+                    column,
+                    count,
+                    max_scene_count,
+                )
+                color_table.loc[row_label, col_label] = np.nan
+                text_table.loc[row_label, col_label] = np.nan
+                continue
             means = {m: mean_metric(strategy, column, m) for m in metric_keys}
             color_table.loc[row_label, col_label] = means[color_metric]
             if np.isnan(means[color_metric]):
@@ -1662,8 +1935,13 @@ def write_metrics_latex_table(
             for metric in metric_keys:
                 rounding = TABLE_ROUNDING_PER_METRIC.get(metric, 2)
                 value = means[metric]
-                parts.append("--" if np.isnan(value) else f"{value:.{rounding}f}")
-            text_table.loc[row_label, col_label] = "$" + " / ".join(parts) + "$"
+                text = "--" if np.isnan(value) else f"{value:.{rounding}f}"
+                if (metric, strategy, column) in significant_cells:
+                    text += r"$\rlap{\textsuperscript{*}}"
+                else:
+                    text += "$"
+                parts.append("$" + text)
+            text_table.loc[row_label, col_label] = " / ".join(parts)
 
     # Blank the "At Init" laser-scan cell(s): scoring the laser-scan init points
     # against the laser scan itself is a trivial perfect 100 that both squashes
@@ -1689,7 +1967,13 @@ def write_metrics_latex_table(
     )
     latex = wrap_tabulars_as_float(
         [tabular],
-        latex_caption=caption,
+        latex_caption=(
+            caption
+            + r". $^{*}$ indicates a statistically significant improvement over SfM "
+            "(Friedman test with Holm's step-down procedure)"
+            if len(sfm_columns) == 1
+            else caption
+        ),
         latex_label=label,
         format_args=FormatOptions(combine_datasets_as_subtables=False),
     )
@@ -1699,237 +1983,47 @@ def write_metrics_latex_table(
     _LOGGER.info("Wrote metrics LaTeX table to %s", out_path)
 
 
-def main() -> None:
-    # ``force=True`` so we reconfigure even if an imported dependency already
-    # installed a root handler (otherwise basicConfig is a no-op and the root
-    # logger stays at WARNING, dropping our INFO logs).
-    logging.basicConfig(
-        level=logging.INFO,
-        force=True,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    args = tyro.cli(Args)
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    _apply_cpu_thread_limit(args.max_cpu_threads)
-
-    if args.load_existing:
-        if not args.output.exists():
-            raise FileNotFoundError(
-                f"--load-existing was set but the metrics JSON {args.output} does "
-                "not exist. Run without --load-existing first, or point --output at "
-                "an existing results file."
-            )
-        existing = json.loads(args.output.read_text())
-        resolved_runs = existing["resolved_runs"]
-        threshold = existing.get(
-            "fscore_threshold_meters", args.fscore_threshold_meters
-        )
-        _LOGGER.info("Loaded existing metrics from %s", args.output)
-
-        latex_path = args.latex_output or args.output.with_suffix(".tex")
-        write_metrics_latex_table(
-            resolved_runs,
-            args.latex_metrics,
-            latex_path,
-            caption=(
-                "Reconstruction accuracy " f"(inlier threshold {threshold:g}\\,m)"
-            ),
-            label="final_recon_fscore",
-        )
-        return
-
-    columns = build_columns(args)
-    if not columns:
-        raise ValueError("No init methods to evaluate. Provide --init-methods.")
-    column_by_label = {column.label: column for column in columns}
-
-    if len(list(args.scenes)) == 0 and args.dataset is None:
-        raise ValueError("No scenes to evaluate. Provide --scenes or --dataset.")
-    scenes = get_scenes_from_args(
-        list(args.scenes), [args.dataset] if args.dataset is not None else []
-    )
-    if not scenes:
-        raise ValueError("No scenes to evaluate. Provide --scenes or --dataset.")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    resolved_runs: dict[str, list[dict]] = {}
-    for scene in scenes:
-        scene = str(scene)
-        runs = resolve_runs_for_scene(scene, columns, args)
-        for run in runs:
-            level = logging.INFO if run.exists else logging.WARNING
-            _LOGGER.log(
-                level,
-                "[%s] column=%s strategy=%s -> %s%s",
-                scene,
-                run.column_label,
-                run.strategy_id,
-                run.output_dir,
-                "" if run.exists else "  (MISSING)",
-            )
-
-        geometry = load_scene_geometry_inputs(scene)
-        points_world = geometry.laser_points_world
-        colors = geometry.laser_colors
-        cameras = geometry.cameras
-
-        scene_debug_dir = (
-            args.debug_export_dir / _sanitize_for_path(scene)
-            if args.debug_export_dir is not None
-            else None
-        )
-
-        # Reference (laser-scan) point set, processed once per scene.
-        reference = process_laser_scan_point_cloud(
-            points_world,
-            colors,
-            cameras,
-            args.voxel_size,
-            debug_export_dir=scene_debug_dir,
-            debug_prefix="laser_scan",
-        )
-
-        scene_entries: list[dict] = []
-
-        # "At Init" row: F-score of each column's initial point cloud / splats
-        # (before training), computed once per column and placed as the first row.
-        for column in columns:
-            init_entry: dict = {
-                "column": column.label,
-                "strategy": AT_INIT_ROW_LABEL,
-                "output_dir": None,
-                "exists": True,
-                "metrics": None,
-            }
-            try:
-                init_reconstruction = build_init_reconstruction(
-                    column,
-                    scene,
-                    args,
-                    geometry,
-                    device,
-                    debug_export_dir=scene_debug_dir,
-                )
-            except FileNotFoundError as exc:
-                init_entry["exists"] = False
-                _LOGGER.warning(
-                    "[%s] No init geometry for column=%s: %s",
-                    scene,
-                    column.label,
-                    exc,
-                )
-            else:
-                init_metrics = compute_fscore_metrics(
-                    init_reconstruction, reference, args.fscore_threshold_meters
-                )
-                init_entry["metrics"] = init_metrics
-                _LOGGER.info(
-                    "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f "
-                    "(thr=%.3f m)",
-                    scene,
-                    column.label,
-                    AT_INIT_ROW_LABEL,
-                    init_metrics["fscore"],
-                    init_metrics["precision"],
-                    init_metrics["recall"],
-                    args.fscore_threshold_meters,
-                )
-            scene_entries.append(init_entry)
-
-        for run in runs:
-            entry: dict = {
-                "column": run.column_label,
-                "strategy": run.row_id,
-                "output_dir": str(run.output_dir),
-                "exists": run.exists,
-                "metrics": None,
-            }
-            if not run.exists:
-                _LOGGER.warning(
-                    "[%s] Skipping missing run column=%s strategy=%s (path %s)",
-                    scene,
-                    run.column_label,
-                    run.strategy_id,
-                    run.output_dir,
-                )
-                scene_entries.append(entry)
-                continue
-
-            splats = load_trained_splats(run.output_dir, args.temp_dir_override)
-            # Bring the trained splats back from the normalized frame into the
-            # world / laser-scan frame so metrics are computed at metric scale.
-            # For older monodepth / da3 point-cloud runs the normalization
-            # transform may have been derived from the init points instead of
-            # the SfM points; resolve_world_frame_splats verifies and corrects
-            # this.
-            splats_world = resolve_world_frame_splats(
-                splats, column_by_label[run.column_label], scene, args, geometry
-            )
-            prefix = _sanitize_for_path(f"{run.column_label}__{run.strategy_id}")
-            reconstruction = process_splats_via_tsdf(
-                splats_world,
-                cameras,
-                args.voxel_size,
-                args.near_plane,
-                args.far_plane,
-                args.tsdf_sdf_trunc_voxel_multiplier,
-                args.min_render_alpha,
-                device,
-                debug_export_dir=scene_debug_dir,
-                debug_prefix=prefix,
-                tsdf_backend=args.tsdf_backend,
-                render_downscale=args.render_downscale,
-                tsdf_block_count=args.tsdf_block_count,
-            )
-
-            metrics = compute_fscore_metrics(
-                reconstruction, reference, args.fscore_threshold_meters
-            )
-            entry["metrics"] = metrics
-            _LOGGER.info(
-                "[%s] column=%s strategy=%s -> F=%.4f P=%.4f R=%.4f " "(thr=%.3f m)",
-                scene,
-                run.column_label,
-                run.strategy_id,
-                metrics["fscore"],
-                metrics["precision"],
-                metrics["recall"],
-                args.fscore_threshold_meters,
-            )
-            scene_entries.append(entry)
-
-        resolved_runs[scene] = scene_entries
-
-        # Periodically write the JSON so we can inspect partial results if the script is interrupted.
-        output = {
-            "dataset": args.dataset,
-            "scenes": [str(s) for s in scenes],
-            "columns": [c.label for c in columns],
-            "fscore_threshold_meters": args.fscore_threshold_meters,
-            "resolved_runs": resolved_runs,
-        }
-
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w") as f:
-            json.dump(output, f, indent=2)
-
-    _LOGGER.info("Wrote reconstruction accuracy metrics to %s", args.output)
-
-    latex_path = args.latex_output or args.output.with_suffix(".tex")
+def render_latex_table(
+    latex_output: Path | None,
+    output: Path,
+    latex_metrics: list[str],
+    resolved_runs: dict[str, list[dict]],
+    threshold_meters: float,
+    scene_list: list[str] | None = None,
+) -> None:
+    """
+    Write the metrics LaTeX table to ``latex_output`` (defaulting to the JSON
+    ``output`` path with a ``.tex`` suffix), captioned with the inlier threshold.
+    """
+    latex_path = latex_output or output.with_suffix(".tex")
     write_metrics_latex_table(
         resolved_runs,
-        args.latex_metrics,
+        latex_metrics,
         latex_path,
-        caption=(
-            "Reconstruction accuracy "
-            f"(inlier threshold {args.fscore_threshold_meters:g}\\,m)"
-        ),
+        caption=f"Reconstruction accuracy (inlier threshold {threshold_meters:g}\\,m)",
         label="final_recon_fscore",
+        scene_list=scene_list,
     )
 
 
-if __name__ == "__main__":
-    main()
+# --------------------------------------------------------------------------- #
+# Intermediate manifest (GPU stage output -> CPU stage input)
+# --------------------------------------------------------------------------- #
+
+
+def save_manifest(intermediate_dir: Path, manifest: dict) -> None:
+    """Write the intermediate ``manifest.json`` under ``intermediate_dir``."""
+    intermediate_dir.mkdir(parents=True, exist_ok=True)
+    with (intermediate_dir / MANIFEST_FILENAME).open("w") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def load_manifest(intermediate_dir: Path) -> dict:
+    """Read the intermediate ``manifest.json`` from ``intermediate_dir``."""
+    manifest_path = intermediate_dir / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Intermediate manifest not found: {manifest_path}. Run the GPU stage "
+            "(eval_final_recon_accuracy_gpu.py) first."
+        )
+    return json.loads(manifest_path.read_text())

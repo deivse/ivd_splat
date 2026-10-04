@@ -70,7 +70,7 @@ for strategy in $ALL_STRATEGIES; do
     ############### Practical Init Methods (+ Laser Scan at same size as those) ###############
 
     # First for datasets where we have laser scan data
-    run_practical_init_methods_no_ablations "$GT_DATASETS_EXCEPT_ETH3D" "monodepth edgs da3 laser_scan"
+    run_practical_init_methods_no_ablations "$GT_DATASETS" "monodepth edgs da3 laser_scan"
     # Datasets without laser scan data, so just monodepth, EDGS and DA3.
     run_practical_init_methods_no_ablations "$OTHER_DATASETS" "monodepth edgs da3"
 

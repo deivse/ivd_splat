@@ -3,7 +3,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=7-00:00:00
-#SBATCH --partition=cpuextralong
+#SBATCH --partition=amdextralong
 #SBATCH --output=/home/desiaiva/logs/mlflow_server.log
 
 # Can't use script_dir here because location changes when running via slurm

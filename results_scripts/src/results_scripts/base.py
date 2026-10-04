@@ -190,6 +190,10 @@ class RunsInfo:
             scene_runs = runs_with_params.df[runs_with_params.df["scene"] == scene]
             if len(scene_runs) == 0:
                 return np.nan
+            # Sort by seed so per-scene value arrays share a consistent eval_iter
+            # ordering across columns, enabling seed-paired comparisons downstream.
+            if "eval_iter" in scene_runs.columns:
+                scene_runs = scene_runs.sort_values("eval_iter")
             return scene_runs[metric].to_numpy()
 
         for metric in metrics:
