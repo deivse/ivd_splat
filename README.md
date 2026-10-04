@@ -1,5 +1,7 @@
 # Official implementation for "The Role of Initialization in 3D Gaussian Splatting".
-This is the official implementation for the paper "The Role of Initialization in 3D Gaussian Splatting" (https://arxiv.org/abs/2603.20714), which deals with analyzing 3DGS performance under different initialization and densification strategies.
+This is the official implementation for the ACCV 2026 paper "The Role of Initialization in 3D Gaussian Splatting" (https://arxiv.org/abs/2603.20714), which deals with analyzing 3DGS performance under different initialization and densification strategies.
+
+> **Abstract.** 3D Gaussian Splatting (3DGS) has become the method of choice for photo-realistic novel view synthesis (NVS), due to its efficiency and compelling visual quality. 3DGS represents the scene as a set of 3D Gaussians, parameterized by their position, spatial extent, and view-dependent color. Starting from an initial point cloud, 3DGS refines the Gaussians' parameters to reconstruct a set of training images as accurately as possible. Typically, a sparse Structure-from-Motion point cloud is used as initialization. In order to obtain a full scene representation, 3DGS methods thus rely on a densification stage. In this paper, we systematically study how initialization affects 3DGS NVS performance and geometric quality, using several densification strategies. We show that dense initialization does not lead to consistent visual improvements when paired with strong densification. Despite that, it helps in generalization to off-trajectory views and significantly improves geometric accuracy of the scenes.
 
 
 # Installation
